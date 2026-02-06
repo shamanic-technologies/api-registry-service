@@ -11,6 +11,35 @@ npm run dev
 
 ## Configuration
 
+## Authentication
+
+Protect the registry with an API key:
+
+```bash
+API_REGISTRY_SERVICE_API_KEY=your-secret-key-here
+```
+
+All endpoints except `/health` require authentication via:
+- Header: `X-API-Key: your-secret-key-here`
+- Or: `Authorization: Bearer your-secret-key-here`
+
+If `API_REGISTRY_SERVICE_API_KEY` is not set, all routes are open (development mode).
+
+For MCP clients (Claude Desktop), add the key to your config:
+
+```json
+{
+  "mcpServers": {
+    "api-registry": {
+      "url": "https://your-registry.railway.app/mcp",
+      "headers": {
+        "X-API-Key": "your-secret-key-here"
+      }
+    }
+  }
+}
+```
+
 Register your services via environment variables:
 
 ### Option 1: Single env var (comma-separated)

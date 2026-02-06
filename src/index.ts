@@ -1,12 +1,18 @@
 import express from "express";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
+import { requireApiKey } from "./auth.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.path === "/health") return next();
+  requireApiKey(req, res, next);
+});
 
 // Service registry: name → base URL
 // Configure via SERVICES env var: "service1=https://url1,service2=https://url2"
