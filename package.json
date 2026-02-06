@@ -21,8 +21,10 @@
   },
   "homepage": "https://github.com/shamanic-technologies/api-registry-service#readme",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "cors": "^2.8.6",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

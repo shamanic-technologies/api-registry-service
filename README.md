@@ -113,6 +113,33 @@ import spec from "../openapi.json" assert { type: "json" };
 app.get("/openapi.json", (req, res) => res.json(spec));
 ```
 
+## MCP Server
+
+The registry also exposes an MCP (Model Context Protocol) endpoint at `/mcp` so LLMs can discover and call APIs directly.
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_services` | List all registered API services |
+| `get_service_spec` | Get the full OpenAPI spec for a service |
+| `get_all_endpoints` | Get a compact summary of all endpoints (LLM-optimized) |
+| `search_endpoints` | Search for endpoints by keyword across all services |
+| `call_api` | Call an API endpoint on any registered service |
+
+### Connect from Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "api-registry": {
+      "url": "https://your-registry.railway.app/mcp"
+    }
+  }
+}
+```
 ## License
 
 MIT

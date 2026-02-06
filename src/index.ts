@@ -1,4 +1,5 @@
 import express from "express";
+import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 
 const app = express();
@@ -258,6 +259,14 @@ app.post("/refresh", async (_req, res) => {
   res.json({ refreshed: true, services: results });
 });
 
+// Register MCP endpoint for LLM access
+registerMcpEndpoint(app, {
+  getServices: () => SERVICES,
+  fetchSpec: async (name, url) => {
+    const result = await fetchSpec(name, url);
+    return { spec: result.spec, error: result.error };
+  },
+});
 app.listen(Number(PORT), "::", () => {
   console.log(`API Registry running on port ${PORT}`);
   console.log(
