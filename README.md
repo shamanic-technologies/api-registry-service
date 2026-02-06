@@ -140,6 +140,14 @@ Add to your `claude_desktop_config.json`:
   }
 }
 ```
+## LLM Agent Guide
+
+A comprehensive guide for LLM agents is available at [`templates/SERVICE_COMMUNICATION.md`](templates/SERVICE_COMMUNICATION.md). Copy this file into the `.context/` directory (or root) of each service repo so that LLM agents know how to discover and call other services.
+
+```bash
+# Copy to your service repo
+cp templates/SERVICE_COMMUNICATION.md /path/to/your-service/.context/SERVICE_COMMUNICATION.md
+```
 ## License
 
 MIT
