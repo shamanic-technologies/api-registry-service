@@ -32,13 +32,23 @@ function loadServices(): Record<string, string> {
   }
 
   // Method 2: Individual env vars: <NAME>_SERVICE_URL or <NAME>_WORKER_URL
+  // Skip RAILWAY_* vars to avoid picking up Railway internal env vars
   for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("RAILWAY_")) continue;
     const match =
       key.match(/^(.+)_SERVICE_URL$/) ||
       key.match(/^(.+)_WORKER_URL$/);
     if (match && value) {
       const name = match[1].toLowerCase().replace(/_/g, "-");
       services[name] = value;
+    }
+  }
+
+  // Validate URLs: must have a protocol, skip invalid entries
+  for (const [name, url] of Object.entries(services)) {
+    if (!/^https?:\/\//.test(url)) {
+      console.warn(`Skipping service "${name}": invalid URL "${url}" (missing https:// prefix)`);
+      delete services[name];
     }
   }
 
