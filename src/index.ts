@@ -31,11 +31,9 @@ function loadServices(): Record<string, string> {
     }
   }
 
-  // Method 2: Individual env vars matching these patterns:
-  //   SERVICE_<NAME>_URL, <NAME>_SERVICE_URL, <NAME>_WORKER_URL
+  // Method 2: Individual env vars: <NAME>_SERVICE_URL or <NAME>_WORKER_URL
   for (const [key, value] of Object.entries(process.env)) {
     const match =
-      key.match(/^SERVICE_(.+)_URL$/) ||
       key.match(/^(.+)_SERVICE_URL$/) ||
       key.match(/^(.+)_WORKER_URL$/);
     if (match && value) {
