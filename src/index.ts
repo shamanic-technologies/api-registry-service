@@ -1,7 +1,14 @@
 import express from "express";
+import { readFileSync, existsSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 import { requireApiKey } from "./auth.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const openapiPath = join(__dirname, "..", "openapi.json");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use((req, res, next) => {
-  if (req.path === "/health") return next();
+  if (req.path === "/health" || req.path === "/openapi.json") return next();
   requireApiKey(req, res, next);
 });
 
@@ -95,6 +102,15 @@ async function fetchSpec(name: string, url: string): Promise<CachedSpec> {
     return entry;
   }
 }
+
+// OpenAPI spec
+app.get("/openapi.json", (_req, res) => {
+  if (existsSync(openapiPath)) {
+    res.json(JSON.parse(readFileSync(openapiPath, "utf-8")));
+  } else {
+    res.status(404).json({ error: "OpenAPI spec not generated" });
+  }
+});
 
 // Health check
 app.get("/health", (_req, res) => {
