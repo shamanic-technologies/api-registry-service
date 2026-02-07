@@ -31,9 +31,11 @@ function loadServices(): Record<string, string> {
     }
   }
 
-  // Method 2: Individual SERVICE_<NAME>_URL env vars
+  // Method 2: Individual env vars: <NAME>_SERVICE_URL or <NAME>_WORKER_URL
   for (const [key, value] of Object.entries(process.env)) {
-    const match = key.match(/^SERVICE_(.+)_URL$/);
+    const match =
+      key.match(/^(.+)_SERVICE_URL$/) ||
+      key.match(/^(.+)_WORKER_URL$/);
     if (match && value) {
       const name = match[1].toLowerCase().replace(/_/g, "-");
       services[name] = value;
