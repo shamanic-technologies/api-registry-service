@@ -24,6 +24,17 @@ const ErrorSchema = z
   })
   .openapi("Error");
 
+const UnauthorizedErrorSchema = z
+  .object({
+    error: z.literal("Invalid or missing API key"),
+  })
+  .openapi("UnauthorizedError");
+
+const unauthorizedResponse = {
+  description: "Invalid or missing API key",
+  content: { "application/json": { schema: UnauthorizedErrorSchema } },
+} as const;
+
 // -- GET /health --
 
 const HealthResponseSchema = z
@@ -63,16 +74,22 @@ registry.registerPath({
       description: "List of registered services",
       content: { "application/json": { schema: ServicesResponseSchema } },
     },
+    401: unauthorizedResponse,
   },
 });
 
 // -- GET /openapi/:service --
 
+const OpenApiSpecSchema = z
+  .object({})
+  .passthrough()
+  .openapi("OpenApiSpec", { description: "An OpenAPI specification object" });
+
 const ServiceSpecResultSchema = z
   .object({
     name: z.string(),
     baseUrl: z.string(),
-    spec: z.unknown().nullable(),
+    spec: OpenApiSpecSchema.nullable(),
     error: z.string().nullable(),
   })
   .openapi("ServiceSpecResult");
@@ -89,8 +106,9 @@ registry.registerPath({
   responses: {
     200: {
       description: "OpenAPI spec for the service",
-      content: { "application/json": { schema: z.unknown() } },
+      content: { "application/json": { schema: OpenApiSpecSchema } },
     },
+    401: unauthorizedResponse,
     404: {
       description: "Service not found",
       content: { "application/json": { schema: ErrorSchema } },
@@ -125,6 +143,7 @@ registry.registerPath({
       description: "All service specs",
       content: { "application/json": { schema: AllSpecsResponseSchema } },
     },
+    401: unauthorizedResponse,
   },
 });
 
@@ -178,6 +197,7 @@ registry.registerPath({
       description: "Compact endpoint summary for LLM consumption",
       content: { "application/json": { schema: LlmContextResponseSchema } },
     },
+    401: unauthorizedResponse,
   },
 });
 
@@ -190,7 +210,7 @@ registry.registerPath({
   responses: {
     200: {
       description: "OpenAPI 3.0 specification",
-      content: { "application/json": { schema: z.unknown() } },
+      content: { "application/json": { schema: OpenApiSpecSchema } },
     },
     404: {
       description: "Spec not generated yet",
