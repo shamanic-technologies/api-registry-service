@@ -5,7 +5,7 @@ import { z } from "zod";
 
 interface ServiceRegistry {
   getServices(): Record<string, string>;
-  fetchSpec(name: string, url: string): Promise<{ spec: unknown; error?: string }>;
+  fetchSpec(url: string): Promise<{ spec: unknown; error?: string }>;
 }
 
 export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
@@ -56,7 +56,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
             }],
           };
         }
-        const result = await registry.fetchSpec(service, url);
+        const result = await registry.fetchSpec(url);
         if (result.error) {
           return {
             content: [{
@@ -80,7 +80,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         const services = registry.getServices();
         const summaries = await Promise.all(
           Object.entries(services).map(async ([name, url]) => {
-            const result = await registry.fetchSpec(name, url);
+            const result = await registry.fetchSpec(url);
             if (result.error || !result.spec) {
               return { service: name, baseUrl: url, error: result.error, endpoints: [] };
             }
@@ -183,7 +183,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
 
         await Promise.all(
           Object.entries(services).map(async ([name, url]) => {
-            const result = await registry.fetchSpec(name, url);
+            const result = await registry.fetchSpec(url);
             if (result.error || !result.spec) return;
 
             const spec = result.spec as {
