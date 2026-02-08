@@ -21,10 +21,10 @@
   },
   "homepage": "https://github.com/shamanic-technologies/api-registry-service#readme",
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^8.4.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "swagger-autogen": "^2.23.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {
