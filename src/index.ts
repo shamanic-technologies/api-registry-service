@@ -64,22 +64,7 @@ function loadServices(): Record<string, string> {
 
 const SERVICES = loadServices();
 
-// Cache for fetched specs
-interface CachedSpec {
-  spec: unknown;
-  fetchedAt: number;
-  error?: string;
-}
-
-const specsCache = new Map<string, CachedSpec>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-async function fetchSpec(name: string, url: string): Promise<CachedSpec> {
-  const cached = specsCache.get(name);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached;
-  }
-
+async function fetchSpec(url: string): Promise<{ spec: unknown; error?: string }> {
   try {
     const response = await fetch(`${url}/openapi.json`, {
       signal: AbortSignal.timeout(10_000),
@@ -88,18 +73,10 @@ async function fetchSpec(name: string, url: string): Promise<CachedSpec> {
       throw new Error(`HTTP ${response.status}`);
     }
     const spec = await response.json();
-    const entry: CachedSpec = { spec, fetchedAt: Date.now() };
-    specsCache.set(name, entry);
-    return entry;
+    return { spec };
   } catch (err: unknown) {
     const error = err instanceof Error ? err.message : "Unknown error";
-    const entry: CachedSpec = {
-      spec: null,
-      fetchedAt: Date.now(),
-      error,
-    };
-    specsCache.set(name, entry);
-    return entry;
+    return { spec: null, error };
   }
 }
 
@@ -143,7 +120,7 @@ app.get("/openapi/:service", async (req, res) => {
     });
   }
 
-  const result = await fetchSpec(service, url);
+  const result = await fetchSpec(url);
   if (result.error) {
     return res.status(502).json({
       error: `Failed to fetch spec for "${service}"`,
@@ -158,7 +135,7 @@ app.get("/openapi/:service", async (req, res) => {
 app.get("/openapi", async (_req, res) => {
   const results = await Promise.all(
     Object.entries(SERVICES).map(async ([name, url]) => {
-      const result = await fetchSpec(name, url);
+      const result = await fetchSpec(url);
       return {
         name,
         baseUrl: url,
@@ -175,7 +152,7 @@ app.get("/openapi", async (_req, res) => {
 app.get("/llm-context", async (_req, res) => {
   const services = await Promise.all(
     Object.entries(SERVICES).map(async ([name, url]) => {
-      const result = await fetchSpec(name, url);
+      const result = await fetchSpec(url);
 
       if (result.error || !result.spec) {
         return {
@@ -261,45 +238,10 @@ app.get("/llm-context", async (_req, res) => {
   });
 });
 
-// Invalidate cache for a specific service (webhook from CI/CD)
-app.post("/refresh/:service", async (req, res) => {
-  const { service } = req.params;
-  specsCache.delete(service);
-
-  const url = SERVICES[service];
-  if (!url) {
-    return res.status(404).json({ error: `Service "${service}" not found` });
-  }
-
-  const result = await fetchSpec(service, url);
-  res.json({
-    service,
-    refreshed: true,
-    error: result.error || null,
-  });
-});
-
-// Refresh all caches
-app.post("/refresh", async (_req, res) => {
-  specsCache.clear();
-
-  const results = await Promise.all(
-    Object.entries(SERVICES).map(async ([name, url]) => {
-      const result = await fetchSpec(name, url);
-      return { name, error: result.error || null };
-    })
-  );
-
-  res.json({ refreshed: true, services: results });
-});
-
 // Register MCP endpoint for LLM access
 registerMcpEndpoint(app, {
   getServices: () => SERVICES,
-  fetchSpec: async (name, url) => {
-    const result = await fetchSpec(name, url);
-    return { spec: result.spec, error: result.error };
-  },
+  fetchSpec,
 });
 app.listen(Number(PORT), "::", () => {
   console.log(`API Registry running on port ${PORT}`);
