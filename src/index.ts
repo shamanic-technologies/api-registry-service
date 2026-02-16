@@ -21,24 +21,30 @@ app.use((req, res, next) => {
   requireApiKey(req, res, next);
 });
 
-// Service registry: name → base URL
+// Service registry: name → { baseUrl, apiKey? }
 // Configure via SERVICES env var: "service1=https://url1,service2=https://url2"
-// Or via individual env vars: SERVICE_<NAME>_URL=https://url
-function loadServices(): Record<string, string> {
-  const services: Record<string, string> = {};
+// Or via individual env vars: <NAME>_SERVICE_URL + <NAME>_SERVICE_API_KEY
+export interface ServiceEntry {
+  baseUrl: string;
+  apiKey?: string;
+}
 
-  // Method 1: SERVICES env var (comma-separated)
+function loadServices(): Record<string, ServiceEntry> {
+  const services: Record<string, ServiceEntry> = {};
+
+  // Method 1: SERVICES env var (comma-separated, no API key support)
   const servicesEnv = process.env.SERVICES;
   if (servicesEnv) {
     for (const entry of servicesEnv.split(",")) {
       const [name, url] = entry.trim().split("=");
       if (name && url) {
-        services[name.trim()] = url.trim();
+        services[name.trim()] = { baseUrl: url.trim() };
       }
     }
   }
 
   // Method 2: Individual env vars: <NAME>_SERVICE_URL or <NAME>_WORKER_URL
+  // Also looks up matching <NAME>_SERVICE_API_KEY for each service
   // Skip RAILWAY_* vars to avoid picking up Railway internal env vars
   for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith("RAILWAY_")) continue;
@@ -46,15 +52,17 @@ function loadServices(): Record<string, string> {
       key.match(/^(.+)_SERVICE_URL$/) ||
       key.match(/^(.+)_WORKER_URL$/);
     if (match && value) {
-      const name = match[1].toLowerCase().replace(/_/g, "-");
-      services[name] = value;
+      const prefix = match[1];
+      const name = prefix.toLowerCase().replace(/_/g, "-");
+      const apiKey = process.env[`${prefix}_SERVICE_API_KEY`];
+      services[name] = { baseUrl: value, apiKey };
     }
   }
 
   // Validate URLs: must have a protocol, skip invalid entries
-  for (const [name, url] of Object.entries(services)) {
-    if (!/^https?:\/\//.test(url)) {
-      console.warn(`Skipping service "${name}": invalid URL "${url}" (missing https:// prefix)`);
+  for (const [name, entry] of Object.entries(services)) {
+    if (!/^https?:\/\//.test(entry.baseUrl)) {
+      console.warn(`Skipping service "${name}": invalid URL "${entry.baseUrl}" (missing https:// prefix)`);
       delete services[name];
     }
   }
@@ -100,10 +108,10 @@ app.get("/health", (_req, res) => {
 
 // List all registered services
 app.get("/services", (_req, res) => {
-  const services = Object.entries(SERVICES).map(([name, url]) => ({
+  const services = Object.entries(SERVICES).map(([name, { baseUrl }]) => ({
     name,
-    baseUrl: url,
-    openapiUrl: `${url}/openapi.json`,
+    baseUrl,
+    openapiUrl: `${baseUrl}/openapi.json`,
   }));
   res.json({ services });
 });
@@ -111,16 +119,16 @@ app.get("/services", (_req, res) => {
 // Get OpenAPI spec for a specific service
 app.get("/openapi/:service", async (req, res) => {
   const { service } = req.params;
-  const url = SERVICES[service];
+  const entry = SERVICES[service];
 
-  if (!url) {
+  if (!entry) {
     return res.status(404).json({
       error: `Service "${service}" not found`,
       available: Object.keys(SERVICES),
     });
   }
 
-  const result = await fetchSpec(url);
+  const result = await fetchSpec(entry.baseUrl);
   if (result.error) {
     return res.status(502).json({
       error: `Failed to fetch spec for "${service}"`,
@@ -134,11 +142,11 @@ app.get("/openapi/:service", async (req, res) => {
 // Fetch all specs at once
 app.get("/openapi", async (_req, res) => {
   const results = await Promise.all(
-    Object.entries(SERVICES).map(async ([name, url]) => {
-      const result = await fetchSpec(url);
+    Object.entries(SERVICES).map(async ([name, { baseUrl }]) => {
+      const result = await fetchSpec(baseUrl);
       return {
         name,
-        baseUrl: url,
+        baseUrl,
         spec: result.spec,
         error: result.error || null,
       };
@@ -151,13 +159,13 @@ app.get("/openapi", async (_req, res) => {
 // Returns a compact summary of all services and their endpoints
 app.get("/llm-context", async (_req, res) => {
   const services = await Promise.all(
-    Object.entries(SERVICES).map(async ([name, url]) => {
-      const result = await fetchSpec(url);
+    Object.entries(SERVICES).map(async ([name, { baseUrl }]) => {
+      const result = await fetchSpec(baseUrl);
 
       if (result.error || !result.spec) {
         return {
           service: name,
-          baseUrl: url,
+          baseUrl,
           error: result.error,
           endpoints: [],
         };
@@ -221,7 +229,7 @@ app.get("/llm-context", async (_req, res) => {
 
       return {
         service: name,
-        baseUrl: url,
+        baseUrl,
         title: spec.info?.title,
         description: spec.info?.description,
         endpoints,
@@ -238,16 +246,83 @@ app.get("/llm-context", async (_req, res) => {
   });
 });
 
+// Proxy endpoint: call any registered service with automatic API key injection
+app.post("/call/:service", async (req, res) => {
+  const { service } = req.params;
+  const entry = SERVICES[service];
+
+  if (!entry) {
+    return res.status(404).json({
+      error: `Service "${service}" not found`,
+      available: Object.keys(SERVICES),
+    });
+  }
+
+  const { method, path, body, headers: extraHeaders } = req.body;
+
+  if (!method || !path) {
+    return res.status(400).json({ error: "Missing required fields: method, path" });
+  }
+
+  if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    return res.status(400).json({ error: `Invalid method: ${method}` });
+  }
+
+  if (!path.startsWith("/")) {
+    return res.status(400).json({ error: "Path must start with /" });
+  }
+
+  try {
+    const url = `${entry.baseUrl}${path}`;
+    const fetchHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...extraHeaders,
+    };
+
+    // Inject API key if available (force-overwrite any caller-provided key)
+    if (entry.apiKey) {
+      fetchHeaders["x-api-key"] = entry.apiKey;
+    }
+
+    const response = await fetch(url, {
+      method,
+      headers: fetchHeaders,
+      body: body && ["POST", "PUT", "PATCH"].includes(method) ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    const responseBody = await response.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(responseBody);
+    } catch {
+      parsed = responseBody;
+    }
+
+    res.status(200).json({
+      status: response.status,
+      ok: response.ok,
+      data: parsed,
+    });
+  } catch (err: unknown) {
+    res.status(502).json({
+      error: err instanceof Error ? err.message : "Downstream request failed",
+    });
+  }
+});
+
 // Register MCP endpoint for LLM access
 registerMcpEndpoint(app, {
   getServices: () => SERVICES,
   fetchSpec,
 });
-app.listen(Number(PORT), "::", () => {
-  console.log(`API Registry running on port ${PORT}`);
-  console.log(
-    `Registered services: ${Object.keys(SERVICES).join(", ") || "(none - configure via SERVICES env var)"}`
-  );
-});
+if (process.env.NODE_ENV !== "test") {
+  app.listen(Number(PORT), "::", () => {
+    console.log(`API Registry running on port ${PORT}`);
+    console.log(
+      `Registered services: ${Object.keys(SERVICES).join(", ") || "(none - configure via SERVICES env var)"}`
+    );
+  });
+}
 
 export default app;

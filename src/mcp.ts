@@ -4,7 +4,7 @@ import { Express, Request, Response } from "express";
 import { z } from "zod";
 
 interface ServiceRegistry {
-  getServices(): Record<string, string>;
+  getServices(): Record<string, { baseUrl: string; apiKey?: string }>;
   fetchSpec(url: string): Promise<{ spec: unknown; error?: string }>;
 }
 
@@ -24,10 +24,10 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       {},
       async () => {
         const services = registry.getServices();
-        const list = Object.entries(services).map(([name, url]) => ({
+        const list = Object.entries(services).map(([name, { baseUrl }]) => ({
           name,
-          baseUrl: url,
-          openapiUrl: `${url}/openapi.json`,
+          baseUrl,
+          openapiUrl: `${baseUrl}/openapi.json`,
         }));
         return {
           content: [{ type: "text", text: JSON.stringify(list, null, 2) }],
@@ -44,8 +44,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       },
       async ({ service }) => {
         const services = registry.getServices();
-        const url = services[service];
-        if (!url) {
+        const entry = services[service];
+        if (!entry) {
           return {
             content: [{
               type: "text",
@@ -56,7 +56,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
             }],
           };
         }
-        const result = await registry.fetchSpec(url);
+        const result = await registry.fetchSpec(entry.baseUrl);
         if (result.error) {
           return {
             content: [{
@@ -79,10 +79,10 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       async () => {
         const services = registry.getServices();
         const summaries = await Promise.all(
-          Object.entries(services).map(async ([name, url]) => {
-            const result = await registry.fetchSpec(url);
+          Object.entries(services).map(async ([name, { baseUrl }]) => {
+            const result = await registry.fetchSpec(baseUrl);
             if (result.error || !result.spec) {
-              return { service: name, baseUrl: url, error: result.error, endpoints: [] };
+              return { service: name, baseUrl, error: result.error, endpoints: [] };
             }
 
             const spec = result.spec as {
@@ -142,7 +142,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
 
             return {
               service: name,
-              baseUrl: url,
+              baseUrl,
               title: spec.info?.title,
               description: spec.info?.description,
               endpoints,
@@ -154,7 +154,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
           content: [{
             type: "text",
             text: JSON.stringify({
-              _usage: "To call an endpoint: send HTTP request to {baseUrl}{path} with the documented method, params, and body fields.",
+              _usage: "To call an endpoint, use the call_api tool with the service name, method, path, and optional body/headers. API keys are injected automatically.",
               services: summaries,
             }, null, 2),
           }],
@@ -182,8 +182,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         }> = [];
 
         await Promise.all(
-          Object.entries(services).map(async ([name, url]) => {
-            const result = await registry.fetchSpec(url);
+          Object.entries(services).map(async ([name, { baseUrl }]) => {
+            const result = await registry.fetchSpec(baseUrl);
             if (result.error || !result.spec) return;
 
             const spec = result.spec as {
@@ -213,7 +213,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
                 if (searchText.includes(q)) {
                   matches.push({
                     service: name,
-                    baseUrl: url,
+                    baseUrl,
                     method: method.toUpperCase(),
                     path,
                     summary,
@@ -251,8 +251,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       },
       async ({ service, method, path, body, headers: extraHeaders }) => {
         const services = registry.getServices();
-        const baseUrl = services[service];
-        if (!baseUrl) {
+        const entry = services[service];
+        if (!entry) {
           return {
             content: [{
               type: "text",
@@ -265,11 +265,16 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         }
 
         try {
-          const url = `${baseUrl}${path}`;
+          const url = `${entry.baseUrl}${path}`;
           const fetchHeaders: Record<string, string> = {
             "Content-Type": "application/json",
             ...extraHeaders,
           };
+
+          // Inject API key if available (force-overwrite any caller-provided key)
+          if (entry.apiKey) {
+            fetchHeaders["x-api-key"] = entry.apiKey;
+          }
 
           const response = await fetch(url, {
             method,
