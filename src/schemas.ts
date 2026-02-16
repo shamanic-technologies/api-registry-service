@@ -201,6 +201,73 @@ registry.registerPath({
   },
 });
 
+// -- POST /call/{service} --
+
+const CallApiRequestSchema = z
+  .object({
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+    path: z
+      .string()
+      .describe("Endpoint path on the target service (e.g. '/v1/campaigns')"),
+    headers: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe("Additional headers to forward"),
+    body: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe("Request body for POST/PUT/PATCH"),
+  })
+  .openapi("CallApiRequest");
+
+const CallApiResponseSchema = z
+  .object({
+    status: z
+      .number()
+      .describe("HTTP status code from downstream service"),
+    ok: z.boolean().describe("Whether the response status was 2xx"),
+    data: z.unknown().describe("Response body from downstream service"),
+  })
+  .openapi("CallApiResponse");
+
+const ProxyErrorSchema = z
+  .object({
+    error: z.string(),
+  })
+  .openapi("ProxyError");
+
+registry.registerPath({
+  method: "post",
+  path: "/call/{service}",
+  summary:
+    "Proxy a request to a registered service with automatic API key injection",
+  request: {
+    params: z.object({
+      service: z.string().openapi({ description: "Target service name" }),
+    }),
+    body: {
+      content: {
+        "application/json": { schema: CallApiRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Proxied response from downstream service",
+      content: { "application/json": { schema: CallApiResponseSchema } },
+    },
+    401: unauthorizedResponse,
+    404: {
+      description: "Service not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    502: {
+      description: "Downstream request failed",
+      content: { "application/json": { schema: ProxyErrorSchema } },
+    },
+  },
+});
+
 // -- GET /openapi.json --
 
 registry.registerPath({
