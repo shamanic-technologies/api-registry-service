@@ -8,6 +8,150 @@ interface ServiceRegistry {
   fetchSpec(url: string): Promise<{ spec: unknown; error?: string }>;
 }
 
+export function resolveRefs(
+  value: unknown,
+  schemas: Record<string, unknown>,
+  visited: Set<string> = new Set()
+): unknown {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => resolveRefs(item, schemas, visited));
+  }
+
+  const obj = value as Record<string, unknown>;
+  if (typeof obj["$ref"] === "string") {
+    const ref = obj["$ref"];
+    const prefix = "#/components/schemas/";
+    if (!ref.startsWith(prefix)) return obj;
+    const schemaName = ref.slice(prefix.length);
+    if (visited.has(schemaName)) return { $ref: `circular:${schemaName}` };
+    const schema = schemas[schemaName];
+    if (!schema) return obj;
+    return resolveRefs(schema, schemas, new Set([...visited, schemaName]));
+  }
+
+  const resolved: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    resolved[key] = resolveRefs(val, schemas, visited);
+  }
+  return resolved;
+}
+
+export async function getEndpointDetails(
+  registry: ServiceRegistry,
+  service: string,
+  method: string,
+  path: string
+): Promise<Record<string, unknown>> {
+  const services = registry.getServices();
+  const entry = services[service];
+  if (!entry) {
+    return {
+      error: `Service "${service}" not found`,
+      available: Object.keys(services),
+    };
+  }
+
+  const result = await registry.fetchSpec(entry.baseUrl);
+  if (result.error || !result.spec) {
+    return { error: result.error || "Failed to fetch spec" };
+  }
+
+  const spec = result.spec as {
+    paths?: Record<string, Record<string, unknown>>;
+    components?: { schemas?: Record<string, unknown> };
+  };
+
+  const pathEntry = spec.paths?.[path];
+  if (!pathEntry) {
+    return {
+      error: `Path "${path}" not found in ${service}`,
+      availablePaths: Object.keys(spec.paths || {}),
+    };
+  }
+
+  const operation = pathEntry[method.toLowerCase()] as Record<string, unknown> | undefined;
+  if (!operation) {
+    return {
+      error: `Method ${method.toUpperCase()} not found for ${path}`,
+      availableMethods: Object.keys(pathEntry)
+        .filter((m) => ["get", "post", "put", "patch", "delete"].includes(m))
+        .map((m) => m.toUpperCase()),
+    };
+  }
+
+  const schemas = spec.components?.schemas || {};
+
+  // Extract parameters (exclude headers)
+  const rawParams = operation.parameters as Array<{
+    name: string;
+    in: string;
+    required?: boolean;
+    description?: string;
+    schema?: unknown;
+  }> | undefined;
+  const parameters = rawParams
+    ?.filter((p) => p.in !== "header")
+    .map((p) => ({
+      name: p.name,
+      in: p.in,
+      required: p.required || false,
+      description: p.description,
+      schema: resolveRefs(p.schema, schemas),
+    }));
+
+  // Extract request body schema
+  const requestBody = operation.requestBody as {
+    required?: boolean;
+    description?: string;
+    content?: Record<string, { schema?: unknown }>;
+  } | undefined;
+  let requestSchema: unknown = undefined;
+  if (requestBody?.content) {
+    const jsonContent = requestBody.content["application/json"];
+    if (jsonContent?.schema) {
+      requestSchema = {
+        required: requestBody.required,
+        description: requestBody.description,
+        schema: resolveRefs(jsonContent.schema, schemas),
+      };
+    }
+  }
+
+  // Extract response schemas
+  const rawResponses = operation.responses as Record<string, {
+    description?: string;
+    content?: Record<string, { schema?: unknown }>;
+  }> | undefined;
+  let responses: Record<string, unknown> | undefined;
+  if (rawResponses) {
+    responses = {};
+    for (const [status, resp] of Object.entries(rawResponses)) {
+      const jsonContent = resp.content?.["application/json"];
+      responses[status] = {
+        description: resp.description,
+        schema: jsonContent?.schema
+          ? resolveRefs(jsonContent.schema, schemas)
+          : undefined,
+      };
+    }
+  }
+
+  return {
+    service,
+    method: method.toUpperCase(),
+    path,
+    summary: operation.summary,
+    description: operation.description,
+    parameters: parameters && parameters.length > 0 ? parameters : undefined,
+    requestBody: requestSchema,
+    responses,
+  };
+}
+
 export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
@@ -233,6 +377,26 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
               matchCount: matches.length,
               matches,
             }, null, 2),
+          }],
+        };
+      }
+    );
+
+    // Tool: get detailed schema for a specific endpoint
+    server.tool(
+      "get_endpoint_details",
+      "Get the full request/response schema for a specific endpoint. Use search_endpoints first to find the service, method, and path.",
+      {
+        service: z.string().describe("Service name (e.g. 'api-service')"),
+        method: z.string().describe("HTTP method (e.g. 'POST')"),
+        path: z.string().describe("Endpoint path (e.g. '/v1/brand/scrape')"),
+      },
+      async ({ service, method, path }) => {
+        const details = await getEndpointDetails(registry, service, method, path);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(details, null, 2),
           }],
         };
       }
