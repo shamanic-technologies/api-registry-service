@@ -320,26 +320,39 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
   // MCP endpoint - POST for JSON-RPC requests
   app.post("/mcp", async (req: Request, res: Response) => {
     try {
-      let sessionId = req.headers["mcp-session-id"] as string | undefined;
-      let transport = sessionId ? sessions.get(sessionId) : undefined;
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-      if (!transport) {
-        sessionId = crypto.randomUUID();
+      if (sessionId) {
+        // Client provided a session ID — look it up
+        const transport = sessions.get(sessionId);
+        if (!transport) {
+          // Session expired or server restarted — tell client to re-initialize
+          return res.status(404).json({
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Session not found. Re-initialize." },
+            id: null,
+          });
+        }
+        res.setHeader("mcp-session-id", sessionId);
+        await transport.handleRequest(req, res, req.body);
+      } else {
+        // No session ID — create a new session (expects initialize request)
+        const newSessionId = crypto.randomUUID();
         const mcpServer = createMcpServer();
 
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => sessionId!,
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (id) => {
-            sessions.set(id, transport!);
+            sessions.set(id, transport);
           },
         });
 
-        sessions.set(sessionId, transport);
+        sessions.set(newSessionId, transport);
         await mcpServer.connect(transport);
-      }
 
-      res.setHeader("mcp-session-id", sessionId!);
-      await transport.handleRequest(req, res, req.body);
+        res.setHeader("mcp-session-id", newSessionId);
+        await transport.handleRequest(req, res, req.body);
+      }
     } catch (error) {
       console.error("MCP request error:", error);
       res.status(500).json({
