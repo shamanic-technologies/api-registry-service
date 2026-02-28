@@ -265,3 +265,51 @@ describe("POST /call/:service", () => {
     expect(res.body.data).toBe("plain text response");
   });
 });
+
+describe("POST /mcp", () => {
+  it("returns 401 without API key", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for stale session ID", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .set({ ...AUTH_HEADER, "mcp-session-id": "nonexistent-session-id" })
+      .send({
+        jsonrpc: "2.0",
+        method: "tools/list",
+        id: 1,
+      });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe(-32001);
+    expect(res.body.error.message).toContain("Session not found");
+  });
+});
+
+describe("GET /mcp", () => {
+  it("returns 400 without session ID header", async () => {
+    const res = await request(app).get("/mcp").set(AUTH_HEADER);
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toContain("mcp-session-id");
+  });
+
+  it("returns 404 for unknown session ID", async () => {
+    const res = await request(app)
+      .get("/mcp")
+      .set({ ...AUTH_HEADER, "mcp-session-id": "unknown-session" });
+    expect(res.status).toBe(404);
+    expect(res.body.error.message).toContain("Session not found");
+  });
+});
+
+describe("DELETE /mcp", () => {
+  it("returns 200 even for unknown session", async () => {
+    const res = await request(app)
+      .delete("/mcp")
+      .set({ ...AUTH_HEADER, "mcp-session-id": "nonexistent" });
+    expect(res.status).toBe(200);
+  });
+});
