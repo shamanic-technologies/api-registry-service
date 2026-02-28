@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
+import { resolveRefs, getEndpointDetails } from "./mcp.js";
 
 // Set env vars BEFORE importing app (loadServices runs on import)
 vi.stubEnv("NODE_ENV", "test");
@@ -311,5 +312,254 @@ describe("DELETE /mcp", () => {
       .delete("/mcp")
       .set({ ...AUTH_HEADER, "mcp-session-id": "nonexistent" });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("resolveRefs", () => {
+  it("returns primitives as-is", () => {
+    expect(resolveRefs("hello", {})).toBe("hello");
+    expect(resolveRefs(42, {})).toBe(42);
+    expect(resolveRefs(null, {})).toBe(null);
+    expect(resolveRefs(undefined, {})).toBe(undefined);
+  });
+
+  it("resolves a simple $ref", () => {
+    const schemas = {
+      Foo: { type: "object", properties: { name: { type: "string" } } },
+    };
+    const input = { $ref: "#/components/schemas/Foo" };
+    expect(resolveRefs(input, schemas)).toEqual(schemas.Foo);
+  });
+
+  it("resolves nested $ref in object properties", () => {
+    const schemas = {
+      Bar: { type: "string", enum: ["a", "b"] },
+    };
+    const input = {
+      type: "object",
+      properties: {
+        status: { $ref: "#/components/schemas/Bar" },
+        count: { type: "number" },
+      },
+    };
+    expect(resolveRefs(input, schemas)).toEqual({
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["a", "b"] },
+        count: { type: "number" },
+      },
+    });
+  });
+
+  it("resolves $ref inside arrays", () => {
+    const schemas = {
+      Item: { type: "object", properties: { id: { type: "string" } } },
+    };
+    const input = {
+      type: "array",
+      items: { $ref: "#/components/schemas/Item" },
+    };
+    expect(resolveRefs(input, schemas)).toEqual({
+      type: "array",
+      items: { type: "object", properties: { id: { type: "string" } } },
+    });
+  });
+
+  it("handles circular references", () => {
+    const schemas: Record<string, unknown> = {
+      Node: {
+        type: "object",
+        properties: {
+          child: { $ref: "#/components/schemas/Node" },
+        },
+      },
+    };
+    const result = resolveRefs(
+      { $ref: "#/components/schemas/Node" },
+      schemas
+    ) as Record<string, unknown>;
+    const props = (result as { properties: Record<string, unknown> }).properties;
+    expect(props.child).toEqual({ $ref: "circular:Node" });
+  });
+
+  it("leaves unknown $ref targets unchanged", () => {
+    const input = { $ref: "#/components/schemas/Missing" };
+    expect(resolveRefs(input, {})).toEqual(input);
+  });
+
+  it("leaves non-schema $ref unchanged", () => {
+    const input = { $ref: "#/other/location" };
+    expect(resolveRefs(input, {})).toEqual(input);
+  });
+});
+
+describe("getEndpointDetails", () => {
+  const MOCK_SPEC = {
+    openapi: "3.0.0",
+    info: { title: "Campaign Service", version: "1.0.0" },
+    paths: {
+      "/v1/campaigns": {
+        get: {
+          summary: "List campaigns",
+          parameters: [
+            { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+            { name: "x-api-key", in: "header", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              description: "Campaign list",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "array",
+                    items: { $ref: "#/components/schemas/Campaign" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          summary: "Create campaign",
+          description: "Creates a new campaign",
+          requestBody: {
+            required: true,
+            description: "Campaign data",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CreateCampaignRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Campaign created",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Campaign" },
+                },
+              },
+            },
+            "400": {
+              description: "Validation error",
+            },
+          },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        Campaign: {
+          type: "object",
+          required: ["id", "name"],
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            status: { $ref: "#/components/schemas/CampaignStatus" },
+          },
+        },
+        CampaignStatus: {
+          type: "string",
+          enum: ["draft", "active", "paused"],
+        },
+        CreateCampaignRequest: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            description: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+
+  function makeRegistry(spec?: unknown, fetchError?: string) {
+    return {
+      getServices: () => ({
+        campaign: { baseUrl: "https://campaign.example.com", apiKey: "key" },
+        runs: { baseUrl: "https://runs.example.com" },
+      }),
+      fetchSpec: async () => fetchError
+        ? { spec: undefined, error: fetchError }
+        : { spec: spec ?? MOCK_SPEC },
+    };
+  }
+
+  it("returns error for unknown service", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "nonexistent", "GET", "/foo"
+    );
+    expect(result.error).toContain("nonexistent");
+    expect(result.available).toContain("campaign");
+  });
+
+  it("returns error when spec fetch fails", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(undefined, "Connection refused"), "campaign", "GET", "/v1/campaigns"
+    );
+    expect(result.error).toBe("Connection refused");
+  });
+
+  it("returns error for unknown path with available paths", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "campaign", "GET", "/v1/unknown"
+    );
+    expect(result.error).toContain("/v1/unknown");
+    expect(result.availablePaths).toContain("/v1/campaigns");
+  });
+
+  it("returns error for unknown method with available methods", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "campaign", "DELETE", "/v1/campaigns"
+    );
+    expect(result.error).toContain("DELETE");
+    expect(result.availableMethods).toContain("GET");
+    expect(result.availableMethods).toContain("POST");
+  });
+
+  it("returns full endpoint details with resolved $ref schemas", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "campaign", "POST", "/v1/campaigns"
+    );
+
+    expect(result.service).toBe("campaign");
+    expect(result.method).toBe("POST");
+    expect(result.path).toBe("/v1/campaigns");
+    expect(result.summary).toBe("Create campaign");
+    expect(result.description).toBe("Creates a new campaign");
+
+    // Request body should be resolved (no $ref)
+    const body = result.requestBody as { required: boolean; schema: { properties: Record<string, { type: string }> } };
+    expect(body.required).toBe(true);
+    expect(body.schema.properties.name.type).toBe("string");
+    expect(body.schema.properties.description.type).toBe("string");
+
+    // Responses should be resolved
+    const responses = result.responses as Record<string, {
+      description: string;
+      schema?: { properties: Record<string, unknown> };
+    }>;
+    expect(responses["201"].description).toBe("Campaign created");
+    expect(responses["201"].schema!.properties.id).toEqual({ type: "string" });
+    // Nested $ref (CampaignStatus inside Campaign) should also be resolved
+    expect(responses["201"].schema!.properties.status).toEqual({
+      type: "string",
+      enum: ["draft", "active", "paused"],
+    });
+    // 400 response has no schema
+    expect(responses["400"].description).toBe("Validation error");
+    expect(responses["400"].schema).toBeUndefined();
+  });
+
+  it("filters out header parameters", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "campaign", "GET", "/v1/campaigns"
+    );
+
+    const params = result.parameters as Array<{ name: string; in: string }>;
+    expect(params).toHaveLength(1);
+    expect(params[0].name).toBe("limit");
+    expect(params[0].in).toBe("query");
   });
 });
