@@ -18,3 +18,14 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction) {
 
   next();
 }
+
+export function requireIdentity(req: Request, res: Response, next: NextFunction) {
+  const orgId = req.headers["x-org-id"];
+  const userId = req.headers["x-user-id"];
+
+  if (!orgId || !userId) {
+    return res.status(400).json({ error: "Missing required headers: x-org-id, x-user-id" });
+  }
+
+  next();
+}
