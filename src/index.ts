@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
-import { requireApiKey } from "./auth.js";
+import { requireApiKey, requireIdentity } from "./auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,7 +18,9 @@ app.use(express.json());
 
 app.use((req, res, next) => {
   if (req.path === "/health" || req.path === "/openapi.json") return next();
-  requireApiKey(req, res, next);
+  requireApiKey(req, res, () => {
+    requireIdentity(req, res, next);
+  });
 });
 
 // Service registry: name → { baseUrl, apiKey? }
@@ -278,6 +280,10 @@ app.post("/call/:service", async (req, res) => {
       "Content-Type": "application/json",
       ...extraHeaders,
     };
+
+    // Forward identity headers (force-overwrite to prevent spoofing)
+    fetchHeaders["x-org-id"] = req.headers["x-org-id"] as string;
+    fetchHeaders["x-user-id"] = req.headers["x-user-id"] as string;
 
     // Inject API key if available (force-overwrite any caller-provided key)
     if (entry.apiKey) {

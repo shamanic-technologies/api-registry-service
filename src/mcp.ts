@@ -152,10 +152,16 @@ export async function getEndpointDetails(
   };
 }
 
+interface SessionIdentity {
+  orgId: string;
+  userId: string;
+}
+
 export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const sessionIdentities = new Map<string, SessionIdentity>();
 
-  function createMcpServer(): McpServer {
+  function createMcpServer(identity: SessionIdentity): McpServer {
     const server = new McpServer({
       name: "API Registry",
       version: "1.0.0",
@@ -435,6 +441,10 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
             ...extraHeaders,
           };
 
+          // Forward identity headers (force-overwrite to prevent spoofing)
+          fetchHeaders["x-org-id"] = identity.orgId;
+          fetchHeaders["x-user-id"] = identity.userId;
+
           // Inject API key if available (force-overwrite any caller-provided key)
           if (entry.apiKey) {
             fetchHeaders["x-api-key"] = entry.apiKey;
@@ -502,7 +512,11 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       } else {
         // No session ID — create a new session (expects initialize request)
         const newSessionId = crypto.randomUUID();
-        const mcpServer = createMcpServer();
+        const sessionIdentity: SessionIdentity = {
+          orgId: req.headers["x-org-id"] as string,
+          userId: req.headers["x-user-id"] as string,
+        };
+        const mcpServer = createMcpServer(sessionIdentity);
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
@@ -512,6 +526,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         });
 
         sessions.set(newSessionId, transport);
+        sessionIdentities.set(newSessionId, sessionIdentity);
         await mcpServer.connect(transport);
 
         res.setHeader("mcp-session-id", newSessionId);
@@ -558,6 +573,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       const transport = sessions.get(sessionId);
       if (transport) await transport.close();
       sessions.delete(sessionId);
+      sessionIdentities.delete(sessionId);
     }
     res.status(200).json({ success: true });
   });

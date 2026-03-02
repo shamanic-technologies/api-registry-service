@@ -35,6 +35,28 @@ const unauthorizedResponse = {
   content: { "application/json": { schema: UnauthorizedErrorSchema } },
 } as const;
 
+const MissingHeadersErrorSchema = z
+  .object({
+    error: z.literal("Missing required headers: x-org-id, x-user-id"),
+  })
+  .openapi("MissingHeadersError");
+
+const badRequestIdentityResponse = {
+  description: "Missing required identity headers",
+  content: { "application/json": { schema: MissingHeadersErrorSchema } },
+} as const;
+
+const identityHeaders = [
+  z.string().openapi({
+    param: { name: "x-org-id", in: "header", required: true },
+    description: "Internal org UUID from client-service",
+  }),
+  z.string().openapi({
+    param: { name: "x-user-id", in: "header", required: true },
+    description: "Internal user UUID from client-service",
+  }),
+];
+
 // -- GET /health --
 
 const HealthResponseSchema = z
@@ -69,11 +91,13 @@ registry.registerPath({
   method: "get",
   path: "/services",
   summary: "List all registered services",
+  request: { headers: identityHeaders },
   responses: {
     200: {
       description: "List of registered services",
       content: { "application/json": { schema: ServicesResponseSchema } },
     },
+    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });
@@ -102,12 +126,14 @@ registry.registerPath({
     params: z.object({
       service: z.string().openapi({ description: "Service name" }),
     }),
+    headers: identityHeaders,
   },
   responses: {
     200: {
       description: "OpenAPI spec for the service",
       content: { "application/json": { schema: OpenApiSpecSchema } },
     },
+    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
     404: {
       description: "Service not found",
@@ -138,11 +164,13 @@ registry.registerPath({
   method: "get",
   path: "/openapi",
   summary: "Fetch all OpenAPI specs at once",
+  request: { headers: identityHeaders },
   responses: {
     200: {
       description: "All service specs",
       content: { "application/json": { schema: AllSpecsResponseSchema } },
     },
+    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });
@@ -192,11 +220,13 @@ registry.registerPath({
   path: "/llm-context",
   summary:
     "LLM-friendly context: compact summary of all services and endpoints",
+  request: { headers: identityHeaders },
   responses: {
     200: {
       description: "Compact endpoint summary for LLM consumption",
       content: { "application/json": { schema: LlmContextResponseSchema } },
     },
+    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });
@@ -245,6 +275,7 @@ registry.registerPath({
     params: z.object({
       service: z.string().openapi({ description: "Target service name" }),
     }),
+    headers: identityHeaders,
     body: {
       content: {
         "application/json": { schema: CallApiRequestSchema },
@@ -256,6 +287,7 @@ registry.registerPath({
       description: "Proxied response from downstream service",
       content: { "application/json": { schema: CallApiResponseSchema } },
     },
+    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
     404: {
       description: "Service not found",

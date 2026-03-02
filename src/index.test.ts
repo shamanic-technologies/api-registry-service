@@ -17,7 +17,11 @@ vi.stubGlobal("fetch", mockFetch);
 // Dynamic import after env setup
 const { default: app } = await import("./index.js");
 
-const AUTH_HEADER = { "x-api-key": "test-registry-key" };
+const AUTH_HEADER = {
+  "x-api-key": "test-registry-key",
+  "x-org-id": "test-org-uuid",
+  "x-user-id": "test-user-uuid",
+};
 
 describe("GET /health", () => {
   it("returns health status without auth", async () => {
@@ -32,6 +36,14 @@ describe("GET /services", () => {
   it("returns 401 without API key", async () => {
     const res = await request(app).get("/services");
     expect(res.status).toBe(401);
+  });
+
+  it("returns 400 without identity headers", async () => {
+    const res = await request(app)
+      .get("/services")
+      .set({ "x-api-key": "test-registry-key" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("x-org-id");
   });
 
   it("lists services without exposing API keys", async () => {
@@ -248,6 +260,44 @@ describe("POST /call/:service", () => {
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers["X-Custom"]).toBe("value123");
     expect(opts.headers["x-api-key"]).toBe("secret-campaign-key");
+  });
+
+  it("forwards x-org-id and x-user-id to downstream service", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set(AUTH_HEADER)
+      .send({ method: "GET", path: "/health" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-org-id"]).toBe("test-org-uuid");
+    expect(opts.headers["x-user-id"]).toBe("test-user-uuid");
+  });
+
+  it("force-overwrites caller-provided identity headers", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set(AUTH_HEADER)
+      .send({
+        method: "GET",
+        path: "/health",
+        headers: { "x-org-id": "spoofed-org", "x-user-id": "spoofed-user" },
+      });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-org-id"]).toBe("test-org-uuid");
+    expect(opts.headers["x-user-id"]).toBe("test-user-uuid");
   });
 
   it("handles non-JSON downstream responses", async () => {
