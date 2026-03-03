@@ -115,9 +115,9 @@ The registry exposes an MCP (Model Context Protocol) endpoint at `/mcp` so LLMs 
 | `get_service_spec` | Full OpenAPI spec for one service | You need complete details (params, body, responses) |
 | `call_api` | Actually call an endpoint on any service | Execute an API call through the registry |
 
-### Connect from Claude Desktop
+### Connect from Claude Desktop / Claude Code
 
-Add to your `claude_desktop_config.json`:
+Add to your MCP client config:
 
 ```json
 {
@@ -125,12 +125,16 @@ Add to your `claude_desktop_config.json`:
     "api-registry": {
       "url": "https://your-registry.railway.app/mcp",
       "headers": {
-        "X-API-Key": "your-secret-key-here"
+        "X-API-Key": "your-secret-key-here",
+        "x-org-id": "your-org-uuid",
+        "x-user-id": "your-user-uuid"
       }
     }
   }
 }
 ```
+
+The `x-org-id` and `x-user-id` headers are optional for MCP connections. When provided, they are forwarded to downstream services via the `call_api` tool. Without them, discovery tools (`list_services`, `search_endpoints`, etc.) still work normally.
 
 ## How to Discover Services
 

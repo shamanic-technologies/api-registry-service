@@ -338,6 +338,30 @@ describe("POST /mcp", () => {
     expect(res.body.error.code).toBe(-32001);
     expect(res.body.error.message).toContain("Session not found");
   });
+
+  it("works without identity headers (x-org-id, x-user-id)", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .set({
+        "x-api-key": "test-registry-key",
+        Accept: "application/json, text/event-stream",
+      })
+      .send({
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0" },
+        },
+        id: 1,
+      });
+    // Should NOT return 400 for missing identity headers
+    expect(res.status).not.toBe(400);
+    // Should return 200 (SSE) with a valid MCP response
+    expect(res.status).toBe(200);
+    expect(res.headers["mcp-session-id"]).toBeDefined();
+  });
 });
 
 describe("GET /mcp", () => {
