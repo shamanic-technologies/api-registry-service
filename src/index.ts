@@ -19,6 +19,8 @@ app.use(express.json());
 app.use((req, res, next) => {
   if (req.path === "/health" || req.path === "/openapi.json") return next();
   requireApiKey(req, res, () => {
+    // MCP endpoint handles identity internally (optional headers captured during session init)
+    if (req.path === "/mcp") return next();
     requireIdentity(req, res, next);
   });
 });

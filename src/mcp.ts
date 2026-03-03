@@ -513,8 +513,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         // No session ID — create a new session (expects initialize request)
         const newSessionId = crypto.randomUUID();
         const sessionIdentity: SessionIdentity = {
-          orgId: req.headers["x-org-id"] as string,
-          userId: req.headers["x-user-id"] as string,
+          orgId: (req.headers["x-org-id"] as string) || "",
+          userId: (req.headers["x-user-id"] as string) || "",
         };
         const mcpServer = createMcpServer(sessionIdentity);
 
