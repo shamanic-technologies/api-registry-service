@@ -1,0 +1,734 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "API Registry Service",
+    "description": "Aggregates OpenAPI specs from multiple microservices into a single queryable registry. Provides REST endpoints and MCP tools for LLM-powered service discovery.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "service": {
+            "type": "string",
+            "enum": [
+              "api-registry"
+            ]
+          },
+          "registeredServices": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "registeredServices"
+        ]
+      },
+      "ServicesResponse": {
+        "type": "object",
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceEntry"
+            }
+          }
+        },
+        "required": [
+          "services"
+        ]
+      },
+      "ServiceEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "openapiUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "baseUrl",
+          "openapiUrl"
+        ]
+      },
+      "UnauthorizedError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "Invalid or missing API key"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "OpenApiSpec": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": {
+          "nullable": true
+        },
+        "description": "An OpenAPI specification object"
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "available": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "UpstreamError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "detail"
+        ]
+      },
+      "AllSpecsResponse": {
+        "type": "object",
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSpecResult"
+            }
+          }
+        },
+        "required": [
+          "services"
+        ]
+      },
+      "ServiceSpecResult": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OpenApiSpec"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "name",
+          "baseUrl",
+          "spec",
+          "error"
+        ]
+      },
+      "LlmContextResponse": {
+        "type": "object",
+        "properties": {
+          "_description": {
+            "type": "string"
+          },
+          "_usage": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmServiceSummary"
+            }
+          }
+        },
+        "required": [
+          "_description",
+          "_usage",
+          "services"
+        ]
+      },
+      "LlmServiceSummary": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EndpointSummary"
+            }
+          }
+        },
+        "required": [
+          "service",
+          "baseUrl",
+          "endpoints"
+        ]
+      },
+      "EndpointSummary": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EndpointParam"
+            }
+          },
+          "bodyFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "method",
+          "path",
+          "summary"
+        ]
+      },
+      "EndpointParam": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "in": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "in",
+          "required"
+        ]
+      },
+      "CallApiResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "number",
+            "description": "HTTP status code from downstream service"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the response status was 2xx"
+          },
+          "data": {
+            "nullable": true,
+            "description": "Response body from downstream service"
+          }
+        },
+        "required": [
+          "status",
+          "ok"
+        ]
+      },
+      "MissingHeadersError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "Missing required headers: x-org-id, x-user-id"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ProxyError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "CallApiRequest": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "Endpoint path on the target service (e.g. '/v1/campaigns')"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Additional headers to forward"
+          },
+          "body": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "Request body for POST/PUT/PATCH"
+          }
+        },
+        "required": [
+          "method",
+          "path"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/services": {
+      "get": {
+        "summary": "List all registered services",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of registered services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi/{service}": {
+      "get": {
+        "summary": "Get OpenAPI spec for a specific service",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Service name"
+            },
+            "required": true,
+            "description": "Service name",
+            "name": "service",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI spec for the service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiSpec"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Failed to fetch spec from upstream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi": {
+      "get": {
+        "summary": "Fetch all OpenAPI specs at once",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All service specs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllSpecsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/llm-context": {
+      "get": {
+        "summary": "LLM-friendly context: compact summary of all services and endpoints",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compact endpoint summary for LLM consumption",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmContextResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/call/{service}": {
+      "post": {
+        "summary": "Proxy a request to a registered service with automatic API key injection",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Target service name"
+            },
+            "required": true,
+            "description": "Target service name",
+            "name": "service",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal org UUID from client-service",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service"
+            },
+            "required": true,
+            "description": "Internal user UUID from client-service",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallApiRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proxied response from downstream service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallApiResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required identity headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissingHeadersError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Downstream request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This service's own OpenAPI specification",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.0 specification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiSpec"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spec not generated yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
