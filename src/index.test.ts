@@ -38,12 +38,12 @@ describe("GET /services", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 400 without identity headers", async () => {
+  it("works without identity headers (read-only discovery)", async () => {
     const res = await request(app)
       .get("/services")
       .set({ "x-api-key": "test-registry-key" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("x-org-id");
+    expect(res.status).toBe(200);
+    expect(res.body.services).toBeInstanceOf(Array);
   });
 
   it("lists services without exposing API keys", async () => {
@@ -65,6 +65,64 @@ describe("GET /services", () => {
     const json = JSON.stringify(res.body);
     expect(json).not.toContain("secret-campaign-key");
     expect(json).not.toContain("apiKey");
+  });
+});
+
+describe("read-only endpoints without identity headers", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const API_KEY_ONLY = { "x-api-key": "test-registry-key" };
+
+  it("GET /openapi/:service works without identity headers", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: async () => ({ openapi: "3.0.0" }),
+    });
+
+    const res = await request(app)
+      .get("/openapi/campaign")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /openapi works without identity headers", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({ openapi: "3.0.0" }),
+    });
+
+    const res = await request(app)
+      .get("/openapi")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.services).toBeInstanceOf(Array);
+  });
+
+  it("GET /llm-context works without identity headers", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({ openapi: "3.0.0", paths: {} }),
+    });
+
+    const res = await request(app)
+      .get("/llm-context")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.services).toBeInstanceOf(Array);
+  });
+
+  it("POST /call/:service still requires identity headers", async () => {
+    const res = await request(app)
+      .post("/call/campaign")
+      .set(API_KEY_ONLY)
+      .send({ method: "GET", path: "/health" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("x-org-id");
   });
 });
 

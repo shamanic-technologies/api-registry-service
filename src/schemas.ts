@@ -57,6 +57,17 @@ const identityHeaders = [
   }),
 ];
 
+const optionalIdentityHeaders = [
+  z.string().optional().openapi({
+    param: { name: "x-org-id", in: "header", required: false },
+    description: "Internal org UUID from client-service (optional for read-only endpoints)",
+  }),
+  z.string().optional().openapi({
+    param: { name: "x-user-id", in: "header", required: false },
+    description: "Internal user UUID from client-service (optional for read-only endpoints)",
+  }),
+];
+
 // -- GET /health --
 
 const HealthResponseSchema = z
@@ -91,13 +102,12 @@ registry.registerPath({
   method: "get",
   path: "/services",
   summary: "List all registered services",
-  request: { headers: identityHeaders },
+  request: { headers: optionalIdentityHeaders },
   responses: {
     200: {
       description: "List of registered services",
       content: { "application/json": { schema: ServicesResponseSchema } },
     },
-    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });
@@ -126,14 +136,13 @@ registry.registerPath({
     params: z.object({
       service: z.string().openapi({ description: "Service name" }),
     }),
-    headers: identityHeaders,
+    headers: optionalIdentityHeaders,
   },
   responses: {
     200: {
       description: "OpenAPI spec for the service",
       content: { "application/json": { schema: OpenApiSpecSchema } },
     },
-    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
     404: {
       description: "Service not found",
@@ -164,13 +173,12 @@ registry.registerPath({
   method: "get",
   path: "/openapi",
   summary: "Fetch all OpenAPI specs at once",
-  request: { headers: identityHeaders },
+  request: { headers: optionalIdentityHeaders },
   responses: {
     200: {
       description: "All service specs",
       content: { "application/json": { schema: AllSpecsResponseSchema } },
     },
-    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });
@@ -220,13 +228,12 @@ registry.registerPath({
   path: "/llm-context",
   summary:
     "LLM-friendly context: compact summary of all services and endpoints",
-  request: { headers: identityHeaders },
+  request: { headers: optionalIdentityHeaders },
   responses: {
     200: {
       description: "Compact endpoint summary for LLM consumption",
       content: { "application/json": { schema: LlmContextResponseSchema } },
     },
-    400: badRequestIdentityResponse,
     401: unauthorizedResponse,
   },
 });

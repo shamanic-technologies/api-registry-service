@@ -21,6 +21,9 @@ app.use((req, res, next) => {
   requireApiKey(req, res, () => {
     // MCP endpoint handles identity internally (optional headers captured during session init)
     if (req.path === "/mcp") return next();
+    // Read-only spec/discovery endpoints: identity adds no value for service-to-service calls
+    if (req.method === "GET" && ["/services", "/openapi", "/llm-context"].includes(req.path)) return next();
+    if (req.method === "GET" && req.path.startsWith("/openapi/")) return next();
     requireIdentity(req, res, next);
   });
 });
