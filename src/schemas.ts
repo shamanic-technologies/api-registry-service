@@ -68,6 +68,21 @@ const optionalIdentityHeaders = [
   }),
 ];
 
+const workflowTrackingHeaders = [
+  z.string().optional().openapi({
+    param: { name: "x-campaign-id", in: "header", required: false },
+    description: "Campaign identifier, injected automatically by workflow-service",
+  }),
+  z.string().optional().openapi({
+    param: { name: "x-brand-id", in: "header", required: false },
+    description: "Brand identifier, injected automatically by workflow-service",
+  }),
+  z.string().optional().openapi({
+    param: { name: "x-workflow-name", in: "header", required: false },
+    description: "Name of the executing workflow, injected automatically by workflow-service",
+  }),
+];
+
 // -- GET /health --
 
 const HealthResponseSchema = z
@@ -282,7 +297,7 @@ registry.registerPath({
     params: z.object({
       service: z.string().openapi({ description: "Target service name" }),
     }),
-    headers: identityHeaders,
+    headers: [...identityHeaders, ...workflowTrackingHeaders],
     body: {
       content: {
         "application/json": { schema: CallApiRequestSchema },
