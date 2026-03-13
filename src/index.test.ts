@@ -358,6 +358,47 @@ describe("POST /call/:service", () => {
     expect(opts.headers["x-user-id"]).toBe("test-user-uuid");
   });
 
+  it("forwards workflow tracking headers when present", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set({
+        ...AUTH_HEADER,
+        "x-campaign-id": "camp-123",
+        "x-brand-id": "brand-456",
+        "x-workflow-name": "outreach-v2",
+      })
+      .send({ method: "GET", path: "/health" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-campaign-id"]).toBe("camp-123");
+    expect(opts.headers["x-brand-id"]).toBe("brand-456");
+    expect(opts.headers["x-workflow-name"]).toBe("outreach-v2");
+  });
+
+  it("omits workflow tracking headers when not provided", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set(AUTH_HEADER)
+      .send({ method: "GET", path: "/health" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-campaign-id"]).toBeUndefined();
+    expect(opts.headers["x-brand-id"]).toBeUndefined();
+    expect(opts.headers["x-workflow-name"]).toBeUndefined();
+  });
+
   it("handles non-JSON downstream responses", async () => {
     mockFetch.mockResolvedValueOnce({
       status: 200,

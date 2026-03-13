@@ -638,6 +638,36 @@
             "description": "Internal user UUID from client-service",
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign identifier, injected automatically by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign identifier, injected automatically by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand identifier, injected automatically by workflow-service"
+            },
+            "required": false,
+            "description": "Brand identifier, injected automatically by workflow-service",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Name of the executing workflow, injected automatically by workflow-service"
+            },
+            "required": false,
+            "description": "Name of the executing workflow, injected automatically by workflow-service",
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "requestBody": {
