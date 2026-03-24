@@ -81,6 +81,10 @@ const workflowTrackingHeaders = [
     param: { name: "x-workflow-name", in: "header", required: false },
     description: "Name of the executing workflow, injected automatically by workflow-service",
   }),
+  z.string().optional().openapi({
+    param: { name: "x-feature-slug", in: "header", required: false },
+    description: "Feature slug identifier, propagated through the service chain",
+  }),
 ];
 
 // -- GET /health --
