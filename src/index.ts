@@ -291,7 +291,7 @@ app.post("/call/:service", async (req, res) => {
     fetchHeaders["x-user-id"] = req.headers["x-user-id"] as string;
 
     // Forward workflow tracking headers if present
-    for (const h of ["x-campaign-id", "x-brand-id", "x-workflow-name"] as const) {
+    for (const h of ["x-campaign-id", "x-brand-id", "x-workflow-name", "x-feature-slug"] as const) {
       const val = req.headers[h];
       if (val) fetchHeaders[h] = val as string;
     }

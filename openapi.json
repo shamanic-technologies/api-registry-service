@@ -668,6 +668,16 @@
             "description": "Name of the executing workflow, injected automatically by workflow-service",
             "name": "x-workflow-name",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug identifier, propagated through the service chain"
+            },
+            "required": false,
+            "description": "Feature slug identifier, propagated through the service chain",
+            "name": "x-feature-slug",
+            "in": "header"
           }
         ],
         "requestBody": {
