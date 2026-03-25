@@ -106,7 +106,7 @@ describe("read-only endpoints without identity headers", () => {
     mockFetch.mockResolvedValue({
       status: 200,
       ok: true,
-      json: async () => ({ openapi: "3.0.0", paths: {} }),
+      json: async () => ({ openapi: "3.0.0", info: { title: "Test" }, paths: { "/health": { get: { summary: "Health" } } } }),
     });
 
     const res = await request(app)
@@ -114,6 +114,50 @@ describe("read-only endpoints without identity headers", () => {
       .set(API_KEY_ONLY);
     expect(res.status).toBe(200);
     expect(res.body.services).toBeInstanceOf(Array);
+    // Should be lightweight overview — no endpoints array, just endpointCount
+    expect(res.body.serviceCount).toBeGreaterThanOrEqual(2);
+    for (const svc of res.body.services) {
+      expect(svc).toHaveProperty("endpointCount");
+      expect(svc).not.toHaveProperty("endpoints");
+    }
+  });
+
+  it("GET /llm-context/:service works without identity headers", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({
+        openapi: "3.0.0",
+        info: { title: "Campaign Service", description: "Manages campaigns" },
+        paths: {
+          "/v1/campaigns": {
+            get: { summary: "List campaigns" },
+            post: { summary: "Create campaign" },
+          },
+        },
+      }),
+    });
+
+    const res = await request(app)
+      .get("/llm-context/campaign")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.service).toBe("campaign");
+    expect(res.body.title).toBe("Campaign Service");
+    expect(res.body.endpointCount).toBe(2);
+    expect(res.body.endpoints).toHaveLength(2);
+    expect(res.body.endpoints[0]).toHaveProperty("method");
+    expect(res.body.endpoints[0]).toHaveProperty("path");
+    expect(res.body.endpoints[0]).toHaveProperty("summary");
+  });
+
+  it("GET /llm-context/:service returns 404 for unknown service", async () => {
+    const res = await request(app)
+      .get("/llm-context/nonexistent")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain("nonexistent");
+    expect(res.body.available).toBeInstanceOf(Array);
   });
 
   it("POST /call/:service still requires identity headers", async () => {

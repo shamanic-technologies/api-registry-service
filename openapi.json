@@ -169,35 +169,36 @@
           "error"
         ]
       },
-      "LlmContextResponse": {
+      "LlmOverviewResponse": {
         "type": "object",
         "properties": {
           "_description": {
             "type": "string"
           },
-          "_usage": {
+          "_workflow": {
             "type": "string"
+          },
+          "serviceCount": {
+            "type": "number"
           },
           "services": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/LlmServiceSummary"
+              "$ref": "#/components/schemas/LlmOverviewService"
             }
           }
         },
         "required": [
           "_description",
-          "_usage",
+          "_workflow",
+          "serviceCount",
           "services"
         ]
       },
-      "LlmServiceSummary": {
+      "LlmOverviewService": {
         "type": "object",
         "properties": {
           "service": {
-            "type": "string"
-          },
-          "baseUrl": {
             "type": "string"
           },
           "title": {
@@ -209,20 +210,44 @@
           "error": {
             "type": "string"
           },
+          "endpointCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "service",
+          "endpointCount"
+        ]
+      },
+      "LlmServiceDetailResponse": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "endpointCount": {
+            "type": "number"
+          },
           "endpoints": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/EndpointSummary"
+              "$ref": "#/components/schemas/LlmServiceEndpoint"
             }
           }
         },
         "required": [
           "service",
-          "baseUrl",
+          "endpointCount",
           "endpoints"
         ]
       },
-      "EndpointSummary": {
+      "LlmServiceEndpoint": {
         "type": "object",
         "properties": {
           "method": {
@@ -233,46 +258,12 @@
           },
           "summary": {
             "type": "string"
-          },
-          "params": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EndpointParam"
-            }
-          },
-          "bodyFields": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           }
         },
         "required": [
           "method",
           "path",
           "summary"
-        ]
-      },
-      "EndpointParam": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "in": {
-            "type": "string"
-          },
-          "required": {
-            "type": "boolean"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "in",
-          "required"
         ]
       },
       "CallApiResponse": {
@@ -558,7 +549,7 @@
     },
     "/llm-context": {
       "get": {
-        "summary": "LLM-friendly context: compact summary of all services and endpoints",
+        "summary": "LLM-friendly overview: list all services with name, description, and endpoint count. Use GET /llm-context/{service} for endpoint details.",
         "parameters": [
           {
             "schema": {
@@ -583,11 +574,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Compact endpoint summary for LLM consumption",
+            "description": "Lightweight service overview for LLM consumption",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LlmContextResponse"
+                  "$ref": "#/components/schemas/LlmOverviewResponse"
                 }
               }
             }
@@ -598,6 +589,97 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/llm-context/{service}": {
+      "get": {
+        "summary": "LLM-friendly endpoint list for a specific service. Use after GET /llm-context to drill into a service.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Service name"
+            },
+            "required": true,
+            "description": "Service name",
+            "name": "service",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Endpoint list for the service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmServiceDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Failed to fetch spec from upstream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "detail"
+                  ]
                 }
               }
             }

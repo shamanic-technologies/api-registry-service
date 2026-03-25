@@ -23,7 +23,7 @@ app.use((req, res, next) => {
     if (req.path === "/mcp") return next();
     // Read-only spec/discovery endpoints: identity adds no value for service-to-service calls
     if (req.method === "GET" && ["/services", "/openapi", "/llm-context"].includes(req.path)) return next();
-    if (req.method === "GET" && req.path.startsWith("/openapi/")) return next();
+    if (req.method === "GET" && (req.path.startsWith("/openapi/") || req.path.startsWith("/llm-context/"))) return next();
     requireIdentity(req, res, next);
   });
 });
@@ -163,93 +163,97 @@ app.get("/openapi", async (_req, res) => {
 });
 
 // LLM-friendly context endpoint
-// Returns a compact summary of all services and their endpoints
+// Returns a lightweight overview of all services (name, description, endpoint count)
+// Use GET /llm-context/:service for endpoint details of a specific service
 app.get("/llm-context", async (_req, res) => {
   const services = await Promise.all(
     Object.entries(SERVICES).map(async ([name, { baseUrl }]) => {
       const result = await fetchSpec(baseUrl);
 
       if (result.error || !result.spec) {
-        return {
-          service: name,
-          baseUrl,
-          error: result.error,
-          endpoints: [],
-        };
+        return { service: name, error: result.error, endpointCount: 0 };
       }
 
       const spec = result.spec as {
         info?: { title?: string; description?: string };
-        paths?: Record<string, Record<string, {
-          summary?: string;
-          description?: string;
-          parameters?: Array<{
-            name: string;
-            in: string;
-            required?: boolean;
-            schema?: { type?: string };
-          }>;
-          requestBody?: {
-            content?: {
-              "application/json"?: {
-                schema?: { properties?: Record<string, unknown> };
-              };
-            };
-          };
-        }>>;
+        paths?: Record<string, Record<string, unknown>>;
       };
 
-      const endpoints = Object.entries(spec.paths || {}).flatMap(
-        ([path, methods]) =>
-          Object.entries(methods)
-            .filter(([method]) =>
-              ["get", "post", "put", "patch", "delete"].includes(method)
-            )
-            .map(([method, details]) => {
-              const params = (details.parameters || [])
-                .filter((p) => p.in !== "header")
-                .map((p) => ({
-                  name: p.name,
-                  in: p.in,
-                  required: p.required || false,
-                  type: p.schema?.type,
-                }));
-
-              const bodyProps = details.requestBody?.content?.[
-                "application/json"
-              ]?.schema?.properties
-                ? Object.keys(
-                    details.requestBody.content["application/json"].schema
-                      .properties
-                  )
-                : [];
-
-              return {
-                method: method.toUpperCase(),
-                path,
-                summary: details.summary || details.description || "",
-                params: params.length > 0 ? params : undefined,
-                bodyFields: bodyProps.length > 0 ? bodyProps : undefined,
-              };
-            })
+      const endpointCount = Object.values(spec.paths || {}).reduce(
+        (count, methods) =>
+          count +
+          Object.keys(methods).filter((m) =>
+            ["get", "post", "put", "patch", "delete"].includes(m)
+          ).length,
+        0
       );
 
       return {
         service: name,
-        baseUrl,
         title: spec.info?.title,
         description: spec.info?.description,
-        endpoints,
+        endpointCount,
       };
     })
   );
 
   res.json({
     _description:
-      "API Registry - Use this to discover available services and their endpoints. Each service exposes a REST API.",
-    _usage:
-      "To call an endpoint: send HTTP request to {baseUrl}{path} with the documented method, params, and body fields.",
+      "API Registry - Overview of all registered services. Use GET /llm-context/{service} for endpoint details.",
+    _workflow:
+      "1. GET /llm-context (overview) → 2. GET /llm-context/{service} (endpoints) → 3. POST /call/{service} (execute)",
+    serviceCount: services.length,
     services,
+  });
+});
+
+// LLM-friendly endpoint list for a specific service
+app.get("/llm-context/:service", async (req, res) => {
+  const { service } = req.params;
+  const entry = SERVICES[service];
+
+  if (!entry) {
+    return res.status(404).json({
+      error: `Service "${service}" not found`,
+      available: Object.keys(SERVICES),
+    });
+  }
+
+  const result = await fetchSpec(entry.baseUrl);
+  if (result.error || !result.spec) {
+    return res.status(502).json({
+      error: `Failed to fetch spec for "${service}"`,
+      detail: result.error,
+    });
+  }
+
+  const spec = result.spec as {
+    info?: { title?: string; description?: string };
+    paths?: Record<string, Record<string, {
+      summary?: string;
+      description?: string;
+    }>>;
+  };
+
+  const endpoints = Object.entries(spec.paths || {}).flatMap(
+    ([path, methods]) =>
+      Object.entries(methods)
+        .filter(([method]) =>
+          ["get", "post", "put", "patch", "delete"].includes(method)
+        )
+        .map(([method, details]) => ({
+          method: method.toUpperCase(),
+          path,
+          summary: details.summary || details.description || "",
+        }))
+  );
+
+  res.json({
+    service,
+    title: spec.info?.title,
+    description: spec.info?.description,
+    endpointCount: endpoints.length,
+    endpoints,
   });
 });
 
