@@ -234,26 +234,87 @@ const LlmServiceSummarySchema = z
   })
   .openapi("LlmServiceSummary");
 
-const LlmContextResponseSchema = z
+const LlmOverviewServiceSchema = z
+  .object({
+    service: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    error: z.string().optional(),
+    endpointCount: z.number(),
+  })
+  .openapi("LlmOverviewService");
+
+const LlmOverviewResponseSchema = z
   .object({
     _description: z.string(),
-    _usage: z.string(),
-    services: z.array(LlmServiceSummarySchema),
+    _workflow: z.string(),
+    serviceCount: z.number(),
+    services: z.array(LlmOverviewServiceSchema),
   })
-  .openapi("LlmContextResponse");
+  .openapi("LlmOverviewResponse");
 
 registry.registerPath({
   method: "get",
   path: "/llm-context",
   summary:
-    "LLM-friendly context: compact summary of all services and endpoints",
+    "LLM-friendly overview: list all services with name, description, and endpoint count. Use GET /llm-context/{service} for endpoint details.",
   request: { headers: optionalIdentityHeaders },
   responses: {
     200: {
-      description: "Compact endpoint summary for LLM consumption",
-      content: { "application/json": { schema: LlmContextResponseSchema } },
+      description: "Lightweight service overview for LLM consumption",
+      content: { "application/json": { schema: LlmOverviewResponseSchema } },
     },
     401: unauthorizedResponse,
+  },
+});
+
+const LlmServiceEndpointSchema = z
+  .object({
+    method: z.string(),
+    path: z.string(),
+    summary: z.string(),
+  })
+  .openapi("LlmServiceEndpoint");
+
+const LlmServiceDetailResponseSchema = z
+  .object({
+    service: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    endpointCount: z.number(),
+    endpoints: z.array(LlmServiceEndpointSchema),
+  })
+  .openapi("LlmServiceDetailResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/llm-context/{service}",
+  summary:
+    "LLM-friendly endpoint list for a specific service. Use after GET /llm-context to drill into a service.",
+  request: {
+    params: z.object({
+      service: z.string().openapi({ description: "Service name" }),
+    }),
+    headers: optionalIdentityHeaders,
+  },
+  responses: {
+    200: {
+      description: "Endpoint list for the service",
+      content: { "application/json": { schema: LlmServiceDetailResponseSchema } },
+    },
+    401: unauthorizedResponse,
+    404: {
+      description: "Service not found",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    502: {
+      description: "Failed to fetch spec from upstream",
+      content: {
+        "application/json": {
+          schema: z.object({ error: z.string(), detail: z.string() }),
+        },
+      },
+    },
   },
 });
 
