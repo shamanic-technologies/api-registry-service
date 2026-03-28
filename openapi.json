@@ -744,11 +744,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Name of the executing workflow, injected automatically by workflow-service"
+              "description": "Slug of the executing workflow, injected automatically by workflow-service"
             },
             "required": false,
-            "description": "Name of the executing workflow, injected automatically by workflow-service",
-            "name": "x-workflow-name",
+            "description": "Slug of the executing workflow, injected automatically by workflow-service",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
