@@ -78,8 +78,8 @@ const workflowTrackingHeaders = [
     description: "Brand identifier, injected automatically by workflow-service",
   }),
   z.string().optional().openapi({
-    param: { name: "x-workflow-name", in: "header", required: false },
-    description: "Name of the executing workflow, injected automatically by workflow-service",
+    param: { name: "x-workflow-slug", in: "header", required: false },
+    description: "Slug of the executing workflow, injected automatically by workflow-service",
   }),
   z.string().optional().openapi({
     param: { name: "x-feature-slug", in: "header", required: false },

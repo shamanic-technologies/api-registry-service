@@ -415,7 +415,7 @@ describe("POST /call/:service", () => {
         ...AUTH_HEADER,
         "x-campaign-id": "camp-123",
         "x-brand-id": "brand-456",
-        "x-workflow-name": "outreach-v2",
+        "x-workflow-slug": "outreach-v2",
         "x-feature-slug": "press-outreach",
       })
       .send({ method: "GET", path: "/health" });
@@ -423,7 +423,7 @@ describe("POST /call/:service", () => {
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers["x-campaign-id"]).toBe("camp-123");
     expect(opts.headers["x-brand-id"]).toBe("brand-456");
-    expect(opts.headers["x-workflow-name"]).toBe("outreach-v2");
+    expect(opts.headers["x-workflow-slug"]).toBe("outreach-v2");
     expect(opts.headers["x-feature-slug"]).toBe("press-outreach");
   });
 
@@ -442,7 +442,7 @@ describe("POST /call/:service", () => {
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers["x-campaign-id"]).toBeUndefined();
     expect(opts.headers["x-brand-id"]).toBeUndefined();
-    expect(opts.headers["x-workflow-name"]).toBeUndefined();
+    expect(opts.headers["x-workflow-slug"]).toBeUndefined();
     expect(opts.headers["x-feature-slug"]).toBeUndefined();
   });
 
