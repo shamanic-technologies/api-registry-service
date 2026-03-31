@@ -414,7 +414,7 @@ describe("POST /call/:service", () => {
       .set({
         ...AUTH_HEADER,
         "x-campaign-id": "camp-123",
-        "x-brand-id": "brand-456",
+        "x-brand-id": "brand-456,brand-789",
         "x-workflow-slug": "outreach-v2",
         "x-feature-slug": "press-outreach",
       })
@@ -422,7 +422,7 @@ describe("POST /call/:service", () => {
 
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers["x-campaign-id"]).toBe("camp-123");
-    expect(opts.headers["x-brand-id"]).toBe("brand-456");
+    expect(opts.headers["x-brand-id"]).toBe("brand-456,brand-789");
     expect(opts.headers["x-workflow-slug"]).toBe("outreach-v2");
     expect(opts.headers["x-feature-slug"]).toBe("press-outreach");
   });
