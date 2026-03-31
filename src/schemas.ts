@@ -75,7 +75,9 @@ const workflowTrackingHeaders = [
   }),
   z.string().optional().openapi({
     param: { name: "x-brand-id", in: "header", required: false },
-    description: "Brand identifier, injected automatically by workflow-service",
+    description:
+      "Brand identifier(s), injected automatically by workflow-service. Supports CSV format for multi-brand campaigns (e.g. 'uuid1,uuid2,uuid3'). Single-brand campaigns send a single UUID.",
+    example: "b1a2c3d4-0000-0000-0000-000000000001,b1a2c3d4-0000-0000-0000-000000000002",
   }),
   z.string().optional().openapi({
     param: { name: "x-workflow-slug", in: "header", required: false },
