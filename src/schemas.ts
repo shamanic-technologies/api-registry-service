@@ -182,59 +182,58 @@ registry.registerPath({
   },
 });
 
-// -- GET /openapi --
+// -- GET /search --
 
-const AllSpecsResponseSchema = z
+const SearchResultSchema = z
   .object({
-    services: z.array(ServiceSpecResultSchema),
+    service: z.string(),
+    method: z.string(),
+    path: z.string(),
+    summary: z.string(),
+    score: z.number(),
+    bodyFields: z.array(z.string()).optional(),
+    responseFields: z.array(z.string()).optional(),
   })
-  .openapi("AllSpecsResponse");
+  .openapi("SearchResult");
+
+const SearchResponseSchema = z
+  .object({
+    query: z.string(),
+    resultCount: z.number(),
+    indexSize: z.number(),
+    results: z.array(SearchResultSchema),
+  })
+  .openapi("SearchResponse");
 
 registry.registerPath({
   method: "get",
-  path: "/openapi",
-  summary: "Fetch all OpenAPI specs at once",
-  request: { headers: optionalIdentityHeaders },
+  path: "/search",
+  summary:
+    "Search for API endpoints across all services using ranked full-text search. Supports fuzzy matching and prefix search.",
+  request: {
+    query: z.object({
+      q: z.string().openapi({ description: "Search query (e.g. 'send email', 'brand extract')" }),
+      service: z.string().optional().openapi({ description: "Filter to a specific service" }),
+      method: z.string().optional().openapi({ description: "Filter by HTTP method (e.g. 'POST')" }),
+      pathPrefix: z.string().optional().openapi({ description: "Filter by path prefix (e.g. '/v1/')" }),
+      limit: z.string().optional().openapi({ description: "Max results (default: 15, max: 50)" }),
+    }),
+    headers: optionalIdentityHeaders,
+  },
   responses: {
     200: {
-      description: "All service specs",
-      content: { "application/json": { schema: AllSpecsResponseSchema } },
+      description: "Ranked search results",
+      content: { "application/json": { schema: SearchResponseSchema } },
+    },
+    400: {
+      description: "Missing query parameter",
+      content: { "application/json": { schema: ErrorSchema } },
     },
     401: unauthorizedResponse,
   },
 });
 
 // -- GET /llm-context --
-
-const EndpointParamSchema = z
-  .object({
-    name: z.string(),
-    in: z.string(),
-    required: z.boolean(),
-    type: z.string().optional(),
-  })
-  .openapi("EndpointParam");
-
-const EndpointSummarySchema = z
-  .object({
-    method: z.string(),
-    path: z.string(),
-    summary: z.string(),
-    params: z.array(EndpointParamSchema).optional(),
-    bodyFields: z.array(z.string()).optional(),
-  })
-  .openapi("EndpointSummary");
-
-const LlmServiceSummarySchema = z
-  .object({
-    service: z.string(),
-    baseUrl: z.string(),
-    title: z.string().optional(),
-    description: z.string().optional(),
-    error: z.string().optional(),
-    endpoints: z.array(EndpointSummarySchema),
-  })
-  .openapi("LlmServiceSummary");
 
 const LlmOverviewServiceSchema = z
   .object({
@@ -278,13 +277,24 @@ const LlmServiceEndpointSchema = z
   })
   .openapi("LlmServiceEndpoint");
 
+const LlmEndpointGroupSchema = z
+  .object({
+    group: z.string(),
+    endpointCount: z.number(),
+    endpoints: z.array(LlmServiceEndpointSchema),
+  })
+  .openapi("LlmEndpointGroup");
+
 const LlmServiceDetailResponseSchema = z
   .object({
     service: z.string(),
     title: z.string().optional(),
     description: z.string().optional(),
-    endpointCount: z.number(),
-    endpoints: z.array(LlmServiceEndpointSchema),
+    endpointCount: z.number().optional(),
+    endpoints: z.array(LlmServiceEndpointSchema).optional(),
+    totalEndpoints: z.number().optional(),
+    groupCount: z.number().optional(),
+    groups: z.array(LlmEndpointGroupSchema).optional(),
   })
   .openapi("LlmServiceDetailResponse");
 
@@ -292,16 +302,21 @@ registry.registerPath({
   method: "get",
   path: "/llm-context/{service}",
   summary:
-    "LLM-friendly endpoint list for a specific service. Use after GET /llm-context to drill into a service.",
+    "LLM-friendly endpoint list for a specific service. Supports filtering by method, path group, or path prefix. Large services (30+ endpoints) auto-group by path prefix.",
   request: {
     params: z.object({
       service: z.string().openapi({ description: "Service name" }),
+    }),
+    query: z.object({
+      method: z.string().optional().openapi({ description: "Filter by HTTP method (e.g. 'POST')" }),
+      group: z.string().optional().openapi({ description: "Filter by path group (e.g. 'campaigns', 'brands')" }),
+      pathPrefix: z.string().optional().openapi({ description: "Filter by path prefix (e.g. '/v1/campaigns')" }),
     }),
     headers: optionalIdentityHeaders,
   },
   responses: {
     200: {
-      description: "Endpoint list for the service",
+      description: "Endpoint list for the service (flat or grouped depending on size)",
       content: { "application/json": { schema: LlmServiceDetailResponseSchema } },
     },
     401: unauthorizedResponse,

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Express, Request, Response } from "express";
 import { z } from "zod";
+import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
 
 interface ServiceRegistry {
   getServices(): Record<string, { baseUrl: string; apiKey?: string }>;
@@ -44,7 +45,8 @@ export async function getEndpointDetails(
   registry: ServiceRegistry,
   service: string,
   method: string,
-  path: string
+  path: string,
+  options?: { includeErrors?: boolean }
 ): Promise<Record<string, unknown>> {
   const services = registry.getServices();
   const entry = services[service];
@@ -130,6 +132,8 @@ export async function getEndpointDetails(
   if (rawResponses) {
     responses = {};
     for (const [status, resp] of Object.entries(rawResponses)) {
+      // By default, only include success responses (2xx)
+      if (!options?.includeErrors && !status.startsWith("2")) continue;
       const jsonContent = resp.content?.["application/json"];
       responses[status] = {
         description: resp.description,
@@ -150,6 +154,125 @@ export async function getEndpointDetails(
     requestBody: requestSchema,
     responses,
   };
+}
+
+// Shared types for spec parsing
+interface ParsedSpec {
+  info?: { title?: string; description?: string };
+  paths?: Record<string, Record<string, {
+    summary?: string;
+    description?: string;
+    requestBody?: {
+      content?: {
+        "application/json"?: {
+          schema?: { properties?: Record<string, unknown> };
+        };
+      };
+    };
+    responses?: Record<string, {
+      content?: {
+        "application/json"?: {
+          schema?: {
+            properties?: Record<string, unknown>;
+            $ref?: string;
+          };
+        };
+      };
+    }>;
+  }>>;
+  components?: { schemas?: Record<string, { properties?: Record<string, unknown> }> };
+}
+
+function extractEndpointsFromSpec(
+  serviceName: string,
+  spec: ParsedSpec
+): IndexedEndpoint[] {
+  const schemas = spec.components?.schemas || {};
+  const endpoints: IndexedEndpoint[] = [];
+
+  for (const [path, methods] of Object.entries(spec.paths || {})) {
+    for (const [method, details] of Object.entries(methods)) {
+      if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+
+      const bodyProps = details.requestBody?.content?.["application/json"]?.schema?.properties
+        ? Object.keys(details.requestBody.content["application/json"].schema.properties)
+        : undefined;
+
+      // Extract response field names from 200/201
+      let responseFieldNames: string[] | undefined;
+      const successResp = details.responses?.["200"] || details.responses?.["201"];
+      if (successResp) {
+        const respSchema = successResp.content?.["application/json"]?.schema;
+        if (respSchema) {
+          if (respSchema.properties) {
+            responseFieldNames = Object.keys(respSchema.properties);
+          } else if (respSchema.$ref) {
+            const refName = respSchema.$ref.replace("#/components/schemas/", "");
+            const resolved = schemas[refName];
+            if (resolved?.properties) {
+              responseFieldNames = Object.keys(resolved.properties);
+            }
+          }
+        }
+      }
+
+      endpoints.push({
+        service: serviceName,
+        method: method.toUpperCase(),
+        path,
+        summary: details.summary || details.description || "",
+        bodyFields: bodyProps?.length ? bodyProps : undefined,
+        responseFields: responseFieldNames?.length ? responseFieldNames : undefined,
+        pathGroup: derivePathGroup(path),
+      });
+    }
+  }
+
+  return endpoints;
+}
+
+// Search index with TTL cache
+const SEARCH_INDEX_TTL_MS = 60_000; // 1 minute
+let searchIndex: EndpointSearchIndex | null = null;
+let searchIndexBuiltAt = 0;
+
+async function getOrBuildSearchIndex(registry: ServiceRegistry): Promise<EndpointSearchIndex> {
+  const now = Date.now();
+  if (searchIndex && now - searchIndexBuiltAt < SEARCH_INDEX_TTL_MS) {
+    return searchIndex;
+  }
+
+  const idx = new EndpointSearchIndex();
+  const services = registry.getServices();
+
+  await Promise.all(
+    Object.entries(services).map(async ([name, { baseUrl }]) => {
+      const result = await registry.fetchSpec(baseUrl);
+      if (result.error || !result.spec) return;
+      const endpoints = extractEndpointsFromSpec(name, result.spec as ParsedSpec);
+      idx.addEndpoints(endpoints);
+    })
+  );
+
+  searchIndex = idx;
+  searchIndexBuiltAt = now;
+  return idx;
+}
+
+// Group endpoints by pathGroup for better navigation
+function groupEndpoints(
+  endpoints: Array<{ method: string; path: string; summary: string; pathGroup: string }>
+): Record<string, Array<{ method: string; path: string; summary: string }>> {
+  const groups: Record<string, Array<{ method: string; path: string; summary: string }>> = {};
+  for (const ep of endpoints) {
+    if (!groups[ep.pathGroup]) groups[ep.pathGroup] = [];
+    groups[ep.pathGroup].push({
+      method: ep.method,
+      path: ep.path,
+      summary: ep.summary,
+    });
+  }
+  return groups;
 }
 
 interface SessionIdentity {
@@ -187,11 +310,14 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
     // Tool: list endpoints for a specific service (progressive disclosure)
     server.tool(
       "list_service_endpoints",
-      "List all endpoints for a specific service with method, path, and summary. Use this after list_services to explore a service. Then use get_endpoint_details for full request/response schemas.",
+      "List endpoints for a service. Supports filtering by method, path prefix, or path group. For large services (50+ endpoints), returns grouped by path prefix for easier navigation. Use get_endpoint_details for full schemas.",
       {
-        service: z.string().describe("Service name from list_services (e.g. 'campaign-service')"),
+        service: z.string().describe("Service name from list_services (e.g. 'campaign')"),
+        method: z.string().optional().describe("Filter by HTTP method (e.g. 'POST')"),
+        pathPrefix: z.string().optional().describe("Filter by path prefix (e.g. '/v1/campaigns')"),
+        group: z.string().optional().describe("Filter by path group (e.g. 'campaigns', 'brands'). Groups are derived from the first meaningful path segment."),
       },
-      async ({ service }) => {
+      async ({ service, method, pathPrefix, group }) => {
         const services = registry.getServices();
         const entry = services[service];
         if (!entry) {
@@ -216,26 +342,47 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
           };
         }
 
-        const spec = result.spec as {
-          info?: { title?: string; description?: string };
-          paths?: Record<string, Record<string, {
-            summary?: string;
-            description?: string;
-          }>>;
-        };
+        const spec = result.spec as ParsedSpec;
+        let endpoints = extractEndpointsFromSpec(service, spec);
 
-        const endpoints = Object.entries(spec.paths || {}).flatMap(
-          ([path, methods]) =>
-            Object.entries(methods)
-              .filter(([method]) =>
-                ["get", "post", "put", "patch", "delete"].includes(method)
-              )
-              .map(([method, details]) => ({
-                method: method.toUpperCase(),
-                path,
-                summary: details.summary || details.description || "",
-              }))
-        );
+        // Apply filters
+        if (method) {
+          endpoints = endpoints.filter(ep => ep.method === method.toUpperCase());
+        }
+        if (pathPrefix) {
+          endpoints = endpoints.filter(ep => ep.path.startsWith(pathPrefix));
+        }
+        if (group) {
+          endpoints = endpoints.filter(ep => ep.pathGroup === group.toLowerCase());
+        }
+
+        // For large unfiltered result sets, return grouped format
+        const isFiltered = !!(method || pathPrefix || group);
+        const useGrouped = !isFiltered && endpoints.length > 30;
+
+        if (useGrouped) {
+          const groups = groupEndpoints(endpoints);
+          const groupSummary = Object.entries(groups).map(([name, eps]) => ({
+            group: name,
+            endpointCount: eps.length,
+            endpoints: eps,
+          }));
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                service,
+                title: spec.info?.title,
+                description: spec.info?.description,
+                totalEndpoints: endpoints.length,
+                groupCount: groupSummary.length,
+                groups: groupSummary,
+                _hint: "Filter by group name: list_service_endpoints(service, group='campaigns'). Use get_endpoint_details(service, method, path) for full schemas.",
+              }, null, 2),
+            }],
+          };
+        }
 
         return {
           content: [{
@@ -245,46 +392,14 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
               title: spec.info?.title,
               description: spec.info?.description,
               endpointCount: endpoints.length,
-              endpoints,
+              endpoints: endpoints.map(ep => ({
+                method: ep.method,
+                path: ep.path,
+                summary: ep.summary,
+              })),
               _hint: "Use get_endpoint_details(service, method, path) for full request/response schemas.",
             }, null, 2),
           }],
-        };
-      }
-    );
-
-    // Tool: get OpenAPI spec for a specific service
-    server.tool(
-      "get_service_spec",
-      "Get the FULL raw OpenAPI specification for a service. WARNING: very large output. Prefer list_service_endpoints + get_endpoint_details for targeted exploration.",
-      {
-        service: z.string().describe("Service name (e.g. 'api-service', 'campaign-service')"),
-      },
-      async ({ service }) => {
-        const services = registry.getServices();
-        const entry = services[service];
-        if (!entry) {
-          return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                error: `Service "${service}" not found`,
-                available: Object.keys(services),
-              }),
-            }],
-          };
-        }
-        const result = await registry.fetchSpec(entry.baseUrl);
-        if (result.error) {
-          return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({ error: result.error }),
-            }],
-          };
-        }
-        return {
-          content: [{ type: "text", text: JSON.stringify(result.spec, null, 2) }],
         };
       }
     );
@@ -303,25 +418,14 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
               return { service: name, error: result.error, endpointCount: 0 };
             }
 
-            const spec = result.spec as {
-              info?: { title?: string; description?: string };
-              paths?: Record<string, Record<string, unknown>>;
-            };
-
-            const endpointCount = Object.values(spec.paths || {}).reduce(
-              (count, methods) =>
-                count +
-                Object.keys(methods).filter((m) =>
-                  ["get", "post", "put", "patch", "delete"].includes(m)
-                ).length,
-              0
-            );
+            const spec = result.spec as ParsedSpec;
+            const endpoints = extractEndpointsFromSpec(name, spec);
 
             return {
               service: name,
               title: spec.info?.title,
               description: spec.info?.description,
-              endpointCount,
+              endpointCount: endpoints.length,
             };
           })
         );
@@ -339,107 +443,45 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       }
     );
 
-    // Tool: search for endpoints matching a keyword
+    // Tool: search for endpoints matching a query (MiniSearch-powered)
     server.tool(
       "search_endpoints",
-      "Search for API endpoints across all services matching a keyword (searches path, summary, description, and body fields). Returns matching endpoints with request body fields and response field names. Use get_endpoint_details for full schemas.",
+      "Search for API endpoints across all services using ranked full-text search. Supports fuzzy matching and prefix search. Filter by service, method, or path prefix. Returns top results ranked by relevance.",
       {
-        query: z.string().describe("Keyword to search for (e.g. 'campaign', 'email', 'brand')"),
+        query: z.string().describe("Search query (e.g. 'send email', 'brand extract', 'campaign stats')"),
+        service: z.string().optional().describe("Filter results to a specific service (e.g. 'campaign')"),
+        method: z.string().optional().describe("Filter by HTTP method (e.g. 'POST')"),
+        pathPrefix: z.string().optional().describe("Filter by path prefix (e.g. '/v1/')"),
+        limit: z.number().optional().describe("Max results to return (default: 15, max: 50)"),
       },
-      async ({ query }) => {
-        const services = registry.getServices();
-        const q = query.toLowerCase();
-        const matches: Array<{
-          service: string;
-          method: string;
-          path: string;
-          summary: string;
-          bodyFields?: string[];
-          responseFields?: string[];
-        }> = [];
+      async ({ query, service, method, pathPrefix, limit }) => {
+        const idx = await getOrBuildSearchIndex(registry);
+        const maxLimit = Math.min(limit || 15, 50);
 
-        await Promise.all(
-          Object.entries(services).map(async ([name, { baseUrl }]) => {
-            const result = await registry.fetchSpec(baseUrl);
-            if (result.error || !result.spec) return;
-
-            const spec = result.spec as {
-              paths?: Record<string, Record<string, {
-                summary?: string;
-                description?: string;
-                requestBody?: {
-                  content?: {
-                    "application/json"?: {
-                      schema?: { properties?: Record<string, unknown> };
-                    };
-                  };
-                };
-                responses?: Record<string, {
-                  content?: {
-                    "application/json"?: {
-                      schema?: {
-                        properties?: Record<string, unknown>;
-                        $ref?: string;
-                      };
-                    };
-                  };
-                }>;
-              }>>;
-              components?: { schemas?: Record<string, { properties?: Record<string, unknown> }> };
-            };
-
-            const schemas = spec.components?.schemas || {};
-
-            for (const [path, methods] of Object.entries(spec.paths || {})) {
-              for (const [method, details] of Object.entries(methods)) {
-                if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
-
-                const summary = details.summary || details.description || "";
-                const bodyProps = details.requestBody?.content?.["application/json"]?.schema?.properties
-                  ? Object.keys(details.requestBody.content["application/json"].schema.properties)
-                  : [];
-
-                const searchText = `${name} ${path} ${summary} ${bodyProps.join(" ")}`.toLowerCase();
-                if (searchText.includes(q)) {
-                  // Extract top-level response field names from 200/201 response
-                  let responseFields: string[] | undefined;
-                  const successResp = details.responses?.["200"] || details.responses?.["201"];
-                  if (successResp) {
-                    const respSchema = successResp.content?.["application/json"]?.schema;
-                    if (respSchema) {
-                      if (respSchema.properties) {
-                        responseFields = Object.keys(respSchema.properties);
-                      } else if (respSchema.$ref) {
-                        const refName = respSchema.$ref.replace("#/components/schemas/", "");
-                        const resolved = schemas[refName];
-                        if (resolved?.properties) {
-                          responseFields = Object.keys(resolved.properties);
-                        }
-                      }
-                    }
-                  }
-
-                  matches.push({
-                    service: name,
-                    method: method.toUpperCase(),
-                    path,
-                    summary,
-                    bodyFields: bodyProps.length > 0 ? bodyProps : undefined,
-                    responseFields: responseFields && responseFields.length > 0 ? responseFields : undefined,
-                  });
-                }
-              }
-            }
-          })
-        );
+        const results = idx.search({
+          query,
+          service,
+          method,
+          pathPrefix,
+          limit: maxLimit,
+        });
 
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               query,
-              matchCount: matches.length,
-              matches,
+              resultCount: results.length,
+              indexSize: idx.size,
+              results: results.map(r => ({
+                service: r.service,
+                method: r.method,
+                path: r.path,
+                summary: r.summary,
+                score: r.score,
+                ...(r.bodyFields?.length ? { bodyFields: r.bodyFields } : {}),
+                ...(r.responseFields?.length ? { responseFields: r.responseFields } : {}),
+              })),
               _hint: "Use get_endpoint_details(service, method, path) for full request/response schemas.",
             }, null, 2),
           }],
@@ -450,14 +492,15 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
     // Tool: get detailed schema for a specific endpoint
     server.tool(
       "get_endpoint_details",
-      "Get the full request AND response schema for a specific endpoint, with all $refs resolved. Use list_service_endpoints or search_endpoints first to find the service, method, and path.",
+      "Get the full request AND response schema for a specific endpoint, with all $refs resolved. By default returns only success (2xx) responses. Set includeErrors=true for error schemas too.",
       {
-        service: z.string().describe("Service name (e.g. 'api-service')"),
+        service: z.string().describe("Service name (e.g. 'api')"),
         method: z.string().describe("HTTP method (e.g. 'POST')"),
         path: z.string().describe("Endpoint path (e.g. '/v1/brand/scrape')"),
+        includeErrors: z.boolean().optional().describe("Include error response schemas (4xx, 5xx). Default: false"),
       },
-      async ({ service, method, path }) => {
-        const details = await getEndpointDetails(registry, service, method, path);
+      async ({ service, method, path, includeErrors }) => {
+        const details = await getEndpointDetails(registry, service, method, path, { includeErrors });
         return {
           content: [{
             type: "text",
@@ -472,7 +515,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
       "call_api",
       "Call an API endpoint on a registered service. API keys and identity headers are injected automatically. Use get_endpoint_details first to understand the request/response format.",
       {
-        service: z.string().describe("Service name (e.g. 'api-service')"),
+        service: z.string().describe("Service name (e.g. 'api')"),
         method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("HTTP method"),
         path: z.string().describe("Endpoint path (e.g. '/v1/campaigns')"),
         body: z.record(z.string(), z.unknown()).optional().describe("Request body (for POST/PUT/PATCH)"),
