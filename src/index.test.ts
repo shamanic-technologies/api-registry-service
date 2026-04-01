@@ -88,18 +88,25 @@ describe("read-only endpoints without identity headers", () => {
     expect(res.status).toBe(200);
   });
 
-  it("GET /openapi works without identity headers", async () => {
+  it("GET /search works without identity headers", async () => {
     mockFetch.mockResolvedValue({
       status: 200,
       ok: true,
-      json: async () => ({ openapi: "3.0.0" }),
+      json: async () => ({
+        openapi: "3.0.0",
+        paths: {
+          "/campaigns": {
+            get: { summary: "List campaigns" },
+          },
+        },
+      }),
     });
 
     const res = await request(app)
-      .get("/openapi")
+      .get("/search?q=campaign")
       .set(API_KEY_ONLY);
     expect(res.status).toBe(200);
-    expect(res.body.services).toBeInstanceOf(Array);
+    expect(res.body.results).toBeInstanceOf(Array);
   });
 
   it("GET /llm-context works without identity headers", async () => {
@@ -738,7 +745,7 @@ describe("getEndpointDetails", () => {
     expect(result.availableMethods).toContain("POST");
   });
 
-  it("returns full endpoint details with resolved $ref schemas", async () => {
+  it("returns only success responses by default (no includeErrors)", async () => {
     const result = await getEndpointDetails(
       makeRegistry(), "campaign", "POST", "/v1/campaigns"
     );
@@ -755,11 +762,12 @@ describe("getEndpointDetails", () => {
     expect(body.schema.properties.name.type).toBe("string");
     expect(body.schema.properties.description.type).toBe("string");
 
-    // Responses should be resolved
+    // Only 2xx responses should be present
     const responses = result.responses as Record<string, {
       description: string;
       schema?: { properties: Record<string, unknown> };
     }>;
+    expect(responses["201"]).toBeDefined();
     expect(responses["201"].description).toBe("Campaign created");
     expect(responses["201"].schema!.properties.id).toEqual({ type: "string" });
     // Nested $ref (CampaignStatus inside Campaign) should also be resolved
@@ -767,9 +775,19 @@ describe("getEndpointDetails", () => {
       type: "string",
       enum: ["draft", "active", "paused"],
     });
-    // 400 response has no schema
+    // 400 response should be EXCLUDED by default
+    expect(responses["400"]).toBeUndefined();
+  });
+
+  it("includes error responses when includeErrors is true", async () => {
+    const result = await getEndpointDetails(
+      makeRegistry(), "campaign", "POST", "/v1/campaigns", { includeErrors: true }
+    );
+
+    const responses = result.responses as Record<string, { description: string }>;
+    expect(responses["201"]).toBeDefined();
+    expect(responses["400"]).toBeDefined();
     expect(responses["400"].description).toBe("Validation error");
-    expect(responses["400"].schema).toBeUndefined();
   });
 
   it("filters out header parameters", async () => {
@@ -781,5 +799,245 @@ describe("getEndpointDetails", () => {
     expect(params).toHaveLength(1);
     expect(params[0].name).toBe("limit");
     expect(params[0].in).toBe("query");
+  });
+});
+
+const { EndpointSearchIndex, derivePathGroup } = await import("./search.js");
+
+describe("EndpointSearchIndex", () => {
+
+  describe("derivePathGroup", () => {
+    it("extracts group from /v1/campaigns/{id}", () => {
+      expect(derivePathGroup("/v1/campaigns/{id}")).toBe("campaigns");
+    });
+
+    it("extracts group from /brands/{brandId}/extract-fields", () => {
+      expect(derivePathGroup("/brands/{brandId}/extract-fields")).toBe("brands");
+    });
+
+    it("handles /health", () => {
+      expect(derivePathGroup("/health")).toBe("health");
+    });
+
+    it("handles root path", () => {
+      expect(derivePathGroup("/")).toBe("root");
+    });
+  });
+
+  describe("search", () => {
+    let idx: InstanceType<typeof EndpointSearchIndex>;
+
+    beforeAll(() => {
+      idx = new EndpointSearchIndex();
+      idx.addEndpoints([
+        {
+          service: "campaign",
+          method: "GET",
+          path: "/campaigns",
+          summary: "List campaigns for org",
+          pathGroup: "campaigns",
+        },
+        {
+          service: "campaign",
+          method: "POST",
+          path: "/campaigns",
+          summary: "Create a new campaign",
+          bodyFields: ["name", "featureSlug", "brandIds"],
+          pathGroup: "campaigns",
+        },
+        {
+          service: "email-gateway",
+          method: "POST",
+          path: "/send",
+          summary: "Send an email",
+          bodyFields: ["to", "subject", "body", "campaignId"],
+          pathGroup: "send",
+        },
+        {
+          service: "brand",
+          method: "POST",
+          path: "/brands/extract-fields",
+          summary: "Extract fields from brand via AI",
+          bodyFields: ["fields", "key", "description"],
+          pathGroup: "brands",
+        },
+        {
+          service: "brand",
+          method: "GET",
+          path: "/brands/{id}",
+          summary: "Get a single brand by ID",
+          pathGroup: "brands",
+        },
+      ]);
+    });
+
+    it("finds endpoints by keyword", () => {
+      const results = idx.search({ query: "campaign" });
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].service).toBe("campaign");
+    });
+
+    it("ranks summary matches higher than body field matches", () => {
+      const results = idx.search({ query: "brand extract" });
+      expect(results[0].path).toBe("/brands/extract-fields");
+    });
+
+    it("filters by service", () => {
+      const results = idx.search({ query: "send", service: "email-gateway" });
+      expect(results.every(r => r.service === "email-gateway")).toBe(true);
+    });
+
+    it("filters by method", () => {
+      const results = idx.search({ query: "brand", method: "GET" });
+      expect(results.every(r => r.method === "GET")).toBe(true);
+    });
+
+    it("respects limit", () => {
+      const results = idx.search({ query: "campaign", limit: 1 });
+      expect(results.length).toBeLessThanOrEqual(1);
+    });
+
+    it("supports fuzzy matching", () => {
+      const results = idx.search({ query: "campain" }); // typo
+      expect(results.length).toBeGreaterThan(0);
+    });
+
+    it("returns scores", () => {
+      const results = idx.search({ query: "campaign" });
+      for (const r of results) {
+        expect(typeof r.score).toBe("number");
+        expect(r.score).toBeGreaterThan(0);
+      }
+    });
+
+    it("skips duplicate documents", () => {
+      const idx2 = new EndpointSearchIndex();
+      idx2.addEndpoint({
+        service: "test",
+        method: "GET",
+        path: "/foo",
+        summary: "Test",
+        pathGroup: "foo",
+      });
+      idx2.addEndpoint({
+        service: "test",
+        method: "GET",
+        path: "/foo",
+        summary: "Test",
+        pathGroup: "foo",
+      });
+      expect(idx2.size).toBe(1);
+    });
+  });
+});
+
+describe("GET /search", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const API_KEY_ONLY = { "x-api-key": "test-registry-key" };
+
+  it("returns 400 without query parameter", async () => {
+    const res = await request(app).get("/search").set(API_KEY_ONLY);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("q");
+  });
+
+  it("returns ranked results for a query", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({
+        openapi: "3.0.0",
+        paths: {
+          "/campaigns": {
+            get: { summary: "List campaigns" },
+            post: { summary: "Create campaign" },
+          },
+          "/health": {
+            get: { summary: "Health check" },
+          },
+        },
+      }),
+    });
+
+    const res = await request(app)
+      .get("/search?q=campaign")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.query).toBe("campaign");
+    expect(res.body.resultCount).toBeGreaterThan(0);
+    expect(res.body.results[0]).toHaveProperty("score");
+    expect(res.body.results[0]).toHaveProperty("service");
+    expect(res.body.results[0]).toHaveProperty("method");
+    expect(res.body.results[0]).toHaveProperty("path");
+  });
+});
+
+describe("GET /llm-context/:service filters", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const API_KEY_ONLY = { "x-api-key": "test-registry-key" };
+  const MOCK_SPEC = {
+    openapi: "3.0.0",
+    info: { title: "Test API", description: "Test" },
+    paths: {
+      "/v1/campaigns": {
+        get: { summary: "List campaigns" },
+        post: { summary: "Create campaign" },
+      },
+      "/v1/campaigns/{id}": {
+        get: { summary: "Get campaign" },
+      },
+      "/v1/brands": {
+        get: { summary: "List brands" },
+      },
+      "/health": {
+        get: { summary: "Health check" },
+      },
+    },
+  };
+
+  it("filters by method", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200, ok: true,
+      json: async () => MOCK_SPEC,
+    });
+
+    const res = await request(app)
+      .get("/llm-context/campaign?method=POST")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.endpoints.every((e: { method: string }) => e.method === "POST")).toBe(true);
+  });
+
+  it("filters by group", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200, ok: true,
+      json: async () => MOCK_SPEC,
+    });
+
+    const res = await request(app)
+      .get("/llm-context/campaign?group=campaigns")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.endpoints.length).toBe(3);
+    expect(res.body.endpoints.every((e: { path: string }) => e.path.includes("campaign"))).toBe(true);
+  });
+
+  it("filters by pathPrefix", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200, ok: true,
+      json: async () => MOCK_SPEC,
+    });
+
+    const res = await request(app)
+      .get("/llm-context/campaign?pathPrefix=/v1/campaigns")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.endpoints.length).toBe(3);
   });
 });

@@ -124,49 +124,69 @@
           "detail"
         ]
       },
-      "AllSpecsResponse": {
+      "SearchResponse": {
         "type": "object",
         "properties": {
-          "services": {
+          "query": {
+            "type": "string"
+          },
+          "resultCount": {
+            "type": "number"
+          },
+          "indexSize": {
+            "type": "number"
+          },
+          "results": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ServiceSpecResult"
+              "$ref": "#/components/schemas/SearchResult"
             }
           }
         },
         "required": [
-          "services"
+          "query",
+          "resultCount",
+          "indexSize",
+          "results"
         ]
       },
-      "ServiceSpecResult": {
+      "SearchResult": {
         "type": "object",
         "properties": {
-          "name": {
+          "service": {
             "type": "string"
           },
-          "baseUrl": {
+          "method": {
             "type": "string"
           },
-          "spec": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OpenApiSpec"
-              },
-              {
-                "nullable": true
-              }
-            ]
+          "path": {
+            "type": "string"
           },
-          "error": {
-            "type": "string",
-            "nullable": true
+          "summary": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "bodyFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "responseFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
-          "name",
-          "baseUrl",
-          "spec",
-          "error"
+          "service",
+          "method",
+          "path",
+          "summary",
+          "score"
         ]
       },
       "LlmOverviewResponse": {
@@ -239,12 +259,22 @@
             "items": {
               "$ref": "#/components/schemas/LlmServiceEndpoint"
             }
+          },
+          "totalEndpoints": {
+            "type": "number"
+          },
+          "groupCount": {
+            "type": "number"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmEndpointGroup"
+            }
           }
         },
         "required": [
-          "service",
-          "endpointCount",
-          "endpoints"
+          "service"
         ]
       },
       "LlmServiceEndpoint": {
@@ -264,6 +294,28 @@
           "method",
           "path",
           "summary"
+        ]
+      },
+      "LlmEndpointGroup": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "endpointCount": {
+            "type": "number"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmServiceEndpoint"
+            }
+          }
+        },
+        "required": [
+          "group",
+          "endpointCount",
+          "endpoints"
         ]
       },
       "CallApiResponse": {
@@ -498,10 +550,60 @@
         }
       }
     },
-    "/openapi": {
+    "/search": {
       "get": {
-        "summary": "Fetch all OpenAPI specs at once",
+        "summary": "Search for API endpoints across all services using ranked full-text search. Supports fuzzy matching and prefix search.",
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Search query (e.g. 'send email', 'brand extract')"
+            },
+            "required": true,
+            "description": "Search query (e.g. 'send email', 'brand extract')",
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter to a specific service"
+            },
+            "required": false,
+            "description": "Filter to a specific service",
+            "name": "service",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by HTTP method (e.g. 'POST')"
+            },
+            "required": false,
+            "description": "Filter by HTTP method (e.g. 'POST')",
+            "name": "method",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by path prefix (e.g. '/v1/')"
+            },
+            "required": false,
+            "description": "Filter by path prefix (e.g. '/v1/')",
+            "name": "pathPrefix",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Max results (default: 15, max: 50)"
+            },
+            "required": false,
+            "description": "Max results (default: 15, max: 50)",
+            "name": "limit",
+            "in": "query"
+          },
           {
             "schema": {
               "type": "string",
@@ -525,11 +627,21 @@
         ],
         "responses": {
           "200": {
-            "description": "All service specs",
+            "description": "Ranked search results",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AllSpecsResponse"
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -598,7 +710,7 @@
     },
     "/llm-context/{service}": {
       "get": {
-        "summary": "LLM-friendly endpoint list for a specific service. Use after GET /llm-context to drill into a service.",
+        "summary": "LLM-friendly endpoint list for a specific service. Supports filtering by method, path group, or path prefix. Large services (30+ endpoints) auto-group by path prefix.",
         "parameters": [
           {
             "schema": {
@@ -609,6 +721,36 @@
             "description": "Service name",
             "name": "service",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by HTTP method (e.g. 'POST')"
+            },
+            "required": false,
+            "description": "Filter by HTTP method (e.g. 'POST')",
+            "name": "method",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by path group (e.g. 'campaigns', 'brands')"
+            },
+            "required": false,
+            "description": "Filter by path group (e.g. 'campaigns', 'brands')",
+            "name": "group",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by path prefix (e.g. '/v1/campaigns')"
+            },
+            "required": false,
+            "description": "Filter by path prefix (e.g. '/v1/campaigns')",
+            "name": "pathPrefix",
+            "in": "query"
           },
           {
             "schema": {
@@ -633,7 +775,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Endpoint list for the service",
+            "description": "Endpoint list for the service (flat or grouped depending on size)",
             "content": {
               "application/json": {
                 "schema": {

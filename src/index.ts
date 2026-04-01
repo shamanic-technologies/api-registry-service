@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 import { requireApiKey, requireIdentity } from "./auth.js";
+import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,7 +23,7 @@ app.use((req, res, next) => {
     // MCP endpoint handles identity internally (optional headers captured during session init)
     if (req.path === "/mcp") return next();
     // Read-only spec/discovery endpoints: identity adds no value for service-to-service calls
-    if (req.method === "GET" && ["/services", "/openapi", "/llm-context"].includes(req.path)) return next();
+    if (req.method === "GET" && ["/services", "/llm-context", "/search"].includes(req.path)) return next();
     if (req.method === "GET" && (req.path.startsWith("/openapi/") || req.path.startsWith("/llm-context/"))) return next();
     requireIdentity(req, res, next);
   });
@@ -146,20 +147,97 @@ app.get("/openapi/:service", async (req, res) => {
   res.json(result.spec);
 });
 
-// Fetch all specs at once
-app.get("/openapi", async (_req, res) => {
-  const results = await Promise.all(
+// Search index with TTL cache for REST endpoints
+const SEARCH_INDEX_TTL_MS = 60_000;
+let restSearchIndex: EndpointSearchIndex | null = null;
+let restSearchIndexBuiltAt = 0;
+
+async function getOrBuildRestSearchIndex(): Promise<EndpointSearchIndex> {
+  const now = Date.now();
+  if (restSearchIndex && now - restSearchIndexBuiltAt < SEARCH_INDEX_TTL_MS) {
+    return restSearchIndex;
+  }
+
+  const idx = new EndpointSearchIndex();
+  await Promise.all(
     Object.entries(SERVICES).map(async ([name, { baseUrl }]) => {
       const result = await fetchSpec(baseUrl);
-      return {
-        name,
-        baseUrl,
-        spec: result.spec,
-        error: result.error || null,
+      if (result.error || !result.spec) return;
+      const spec = result.spec as {
+        paths?: Record<string, Record<string, {
+          summary?: string;
+          description?: string;
+          requestBody?: {
+            content?: { "application/json"?: { schema?: { properties?: Record<string, unknown> } } };
+          };
+          responses?: Record<string, {
+            content?: { "application/json"?: { schema?: { properties?: Record<string, unknown>; $ref?: string } } };
+          }>;
+        }>>;
+        components?: { schemas?: Record<string, { properties?: Record<string, unknown> }> };
       };
+      const schemas = spec.components?.schemas || {};
+
+      for (const [path, methods] of Object.entries(spec.paths || {})) {
+        for (const [method, details] of Object.entries(methods)) {
+          if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+          const bodyProps = details.requestBody?.content?.["application/json"]?.schema?.properties
+            ? Object.keys(details.requestBody.content["application/json"].schema.properties)
+            : undefined;
+
+          let responseFieldNames: string[] | undefined;
+          const successResp = details.responses?.["200"] || details.responses?.["201"];
+          if (successResp) {
+            const respSchema = successResp.content?.["application/json"]?.schema;
+            if (respSchema?.properties) {
+              responseFieldNames = Object.keys(respSchema.properties);
+            } else if (respSchema?.$ref) {
+              const refName = respSchema.$ref.replace("#/components/schemas/", "");
+              const resolved = schemas[refName];
+              if (resolved?.properties) responseFieldNames = Object.keys(resolved.properties);
+            }
+          }
+
+          idx.addEndpoint({
+            service: name,
+            method: method.toUpperCase(),
+            path,
+            summary: details.summary || details.description || "",
+            bodyFields: bodyProps?.length ? bodyProps : undefined,
+            responseFields: responseFieldNames?.length ? responseFieldNames : undefined,
+            pathGroup: derivePathGroup(path),
+          });
+        }
+      }
     })
   );
-  res.json({ services: results });
+
+  restSearchIndex = idx;
+  restSearchIndexBuiltAt = now;
+  return idx;
+}
+
+// Search endpoints across all services (MiniSearch-powered)
+app.get("/search", async (req, res) => {
+  const query = req.query.q as string;
+  if (!query) {
+    return res.status(400).json({ error: "Missing required query parameter: q" });
+  }
+
+  const service = req.query.service as string | undefined;
+  const method = req.query.method as string | undefined;
+  const pathPrefix = req.query.pathPrefix as string | undefined;
+  const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
+
+  const idx = await getOrBuildRestSearchIndex();
+  const results = idx.search({ query, service, method, pathPrefix, limit });
+
+  res.json({
+    query,
+    resultCount: results.length,
+    indexSize: idx.size,
+    results,
+  });
 });
 
 // LLM-friendly context endpoint
@@ -201,13 +279,14 @@ app.get("/llm-context", async (_req, res) => {
     _description:
       "API Registry - Overview of all registered services. Use GET /llm-context/{service} for endpoint details.",
     _workflow:
-      "1. GET /llm-context (overview) → 2. GET /llm-context/{service} (endpoints) → 3. POST /call/{service} (execute)",
+      "1. GET /llm-context (overview) → 2. GET /llm-context/{service}?group=X (endpoints) → 3. GET /search?q=keyword (search) → 4. POST /call/{service} (execute)",
     serviceCount: services.length,
     services,
   });
 });
 
 // LLM-friendly endpoint list for a specific service
+// Supports query filters: ?method=POST&group=campaigns&pathPrefix=/v1/campaigns
 app.get("/llm-context/:service", async (req, res) => {
   const { service } = req.params;
   const entry = SERVICES[service];
@@ -235,7 +314,12 @@ app.get("/llm-context/:service", async (req, res) => {
     }>>;
   };
 
-  const endpoints = Object.entries(spec.paths || {}).flatMap(
+  // Parse filters from query params
+  const methodFilter = (req.query.method as string)?.toUpperCase();
+  const groupFilter = req.query.group as string;
+  const pathPrefixFilter = req.query.pathPrefix as string;
+
+  let endpoints = Object.entries(spec.paths || {}).flatMap(
     ([path, methods]) =>
       Object.entries(methods)
         .filter(([method]) =>
@@ -245,15 +329,58 @@ app.get("/llm-context/:service", async (req, res) => {
           method: method.toUpperCase(),
           path,
           summary: details.summary || details.description || "",
+          pathGroup: derivePathGroup(path),
         }))
   );
+
+  // Apply filters
+  if (methodFilter) {
+    endpoints = endpoints.filter(ep => ep.method === methodFilter);
+  }
+  if (groupFilter) {
+    endpoints = endpoints.filter(ep => ep.pathGroup === groupFilter.toLowerCase());
+  }
+  if (pathPrefixFilter) {
+    endpoints = endpoints.filter(ep => ep.path.startsWith(pathPrefixFilter));
+  }
+
+  const isFiltered = !!(methodFilter || groupFilter || pathPrefixFilter);
+  const useGrouped = !isFiltered && endpoints.length > 30;
+
+  if (useGrouped) {
+    // Group by path prefix for large services
+    const groups: Record<string, Array<{ method: string; path: string; summary: string }>> = {};
+    for (const ep of endpoints) {
+      if (!groups[ep.pathGroup]) groups[ep.pathGroup] = [];
+      groups[ep.pathGroup].push({ method: ep.method, path: ep.path, summary: ep.summary });
+    }
+
+    const groupSummary = Object.entries(groups).map(([name, eps]) => ({
+      group: name,
+      endpointCount: eps.length,
+      endpoints: eps,
+    }));
+
+    return res.json({
+      service,
+      title: spec.info?.title,
+      description: spec.info?.description,
+      totalEndpoints: endpoints.length,
+      groupCount: groupSummary.length,
+      groups: groupSummary,
+    });
+  }
 
   res.json({
     service,
     title: spec.info?.title,
     description: spec.info?.description,
     endpointCount: endpoints.length,
-    endpoints,
+    endpoints: endpoints.map(ep => ({
+      method: ep.method,
+      path: ep.path,
+      summary: ep.summary,
+    })),
   });
 });
 
