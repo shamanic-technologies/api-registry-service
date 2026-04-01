@@ -182,6 +182,57 @@ registry.registerPath({
   },
 });
 
+// -- GET /search --
+
+const SearchResultSchema = z
+  .object({
+    service: z.string(),
+    method: z.string(),
+    path: z.string(),
+    summary: z.string(),
+    score: z.number(),
+    bodyFields: z.array(z.string()).optional(),
+    responseFields: z.array(z.string()).optional(),
+  })
+  .openapi("SearchResult");
+
+const SearchResponseSchema = z
+  .object({
+    query: z.string(),
+    resultCount: z.number(),
+    indexSize: z.number(),
+    results: z.array(SearchResultSchema),
+  })
+  .openapi("SearchResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/search",
+  summary:
+    "Search for API endpoints across all services using ranked full-text search. Supports fuzzy matching and prefix search.",
+  request: {
+    query: z.object({
+      q: z.string().openapi({ description: "Search query (e.g. 'send email', 'brand extract')" }),
+      service: z.string().optional().openapi({ description: "Filter to a specific service" }),
+      method: z.string().optional().openapi({ description: "Filter by HTTP method (e.g. 'POST')" }),
+      pathPrefix: z.string().optional().openapi({ description: "Filter by path prefix (e.g. '/v1/')" }),
+      limit: z.string().optional().openapi({ description: "Max results (default: 15, max: 50)" }),
+    }),
+    headers: optionalIdentityHeaders,
+  },
+  responses: {
+    200: {
+      description: "Ranked search results",
+      content: { "application/json": { schema: SearchResponseSchema } },
+    },
+    400: {
+      description: "Missing query parameter",
+      content: { "application/json": { schema: ErrorSchema } },
+    },
+    401: unauthorizedResponse,
+  },
+});
+
 // -- GET /llm-context --
 
 const LlmOverviewServiceSchema = z

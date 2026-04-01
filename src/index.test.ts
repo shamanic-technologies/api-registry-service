@@ -88,6 +88,27 @@ describe("read-only endpoints without identity headers", () => {
     expect(res.status).toBe(200);
   });
 
+  it("GET /search works without identity headers", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({
+        openapi: "3.0.0",
+        paths: {
+          "/campaigns": {
+            get: { summary: "List campaigns" },
+          },
+        },
+      }),
+    });
+
+    const res = await request(app)
+      .get("/search?q=campaign")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.results).toBeInstanceOf(Array);
+  });
+
   it("GET /llm-context works without identity headers", async () => {
     mockFetch.mockResolvedValue({
       status: 200,
@@ -907,6 +928,50 @@ describe("EndpointSearchIndex", () => {
       });
       expect(idx2.size).toBe(1);
     });
+  });
+});
+
+describe("GET /search", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const API_KEY_ONLY = { "x-api-key": "test-registry-key" };
+
+  it("returns 400 without query parameter", async () => {
+    const res = await request(app).get("/search").set(API_KEY_ONLY);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("q");
+  });
+
+  it("returns ranked results for a query", async () => {
+    mockFetch.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => ({
+        openapi: "3.0.0",
+        paths: {
+          "/campaigns": {
+            get: { summary: "List campaigns" },
+            post: { summary: "Create campaign" },
+          },
+          "/health": {
+            get: { summary: "Health check" },
+          },
+        },
+      }),
+    });
+
+    const res = await request(app)
+      .get("/search?q=campaign")
+      .set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.query).toBe("campaign");
+    expect(res.body.resultCount).toBeGreaterThan(0);
+    expect(res.body.results[0]).toHaveProperty("score");
+    expect(res.body.results[0]).toHaveProperty("service");
+    expect(res.body.results[0]).toHaveProperty("method");
+    expect(res.body.results[0]).toHaveProperty("path");
   });
 });
 
