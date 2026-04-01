@@ -124,6 +124,71 @@
           "detail"
         ]
       },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "resultCount": {
+            "type": "number"
+          },
+          "indexSize": {
+            "type": "number"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          }
+        },
+        "required": [
+          "query",
+          "resultCount",
+          "indexSize",
+          "results"
+        ]
+      },
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "bodyFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "responseFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "service",
+          "method",
+          "path",
+          "summary",
+          "score"
+        ]
+      },
       "LlmOverviewResponse": {
         "type": "object",
         "properties": {
@@ -478,6 +543,115 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UpstreamError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "summary": "Search for API endpoints across all services using ranked full-text search. Supports fuzzy matching and prefix search.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Search query (e.g. 'send email', 'brand extract')"
+            },
+            "required": true,
+            "description": "Search query (e.g. 'send email', 'brand extract')",
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter to a specific service"
+            },
+            "required": false,
+            "description": "Filter to a specific service",
+            "name": "service",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by HTTP method (e.g. 'POST')"
+            },
+            "required": false,
+            "description": "Filter by HTTP method (e.g. 'POST')",
+            "name": "method",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by path prefix (e.g. '/v1/')"
+            },
+            "required": false,
+            "description": "Filter by path prefix (e.g. '/v1/')",
+            "name": "pathPrefix",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Max results (default: 15, max: 50)"
+            },
+            "required": false,
+            "description": "Max results (default: 15, max: 50)",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal org UUID from client-service (optional for read-only endpoints)",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID from client-service (optional for read-only endpoints)"
+            },
+            "required": false,
+            "description": "Internal user UUID from client-service (optional for read-only endpoints)",
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
                 }
               }
             }

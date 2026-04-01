@@ -5,7 +5,7 @@ import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 import { requireApiKey, requireIdentity } from "./auth.js";
-import { derivePathGroup } from "./search.js";
+import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,7 +23,7 @@ app.use((req, res, next) => {
     // MCP endpoint handles identity internally (optional headers captured during session init)
     if (req.path === "/mcp") return next();
     // Read-only spec/discovery endpoints: identity adds no value for service-to-service calls
-    if (req.method === "GET" && ["/services", "/llm-context"].includes(req.path)) return next();
+    if (req.method === "GET" && ["/services", "/llm-context", "/search"].includes(req.path)) return next();
     if (req.method === "GET" && (req.path.startsWith("/openapi/") || req.path.startsWith("/llm-context/"))) return next();
     requireIdentity(req, res, next);
   });
@@ -145,6 +145,99 @@ app.get("/openapi/:service", async (req, res) => {
   }
 
   res.json(result.spec);
+});
+
+// Search index with TTL cache (shared between REST and MCP via same logic)
+const SEARCH_INDEX_TTL_MS = 60_000;
+let cachedSearchIndex: EndpointSearchIndex | null = null;
+let searchIndexBuiltAt = 0;
+
+async function getOrBuildSearchIndex(): Promise<EndpointSearchIndex> {
+  const now = Date.now();
+  if (cachedSearchIndex && now - searchIndexBuiltAt < SEARCH_INDEX_TTL_MS) {
+    return cachedSearchIndex;
+  }
+
+  const idx = new EndpointSearchIndex();
+  await Promise.all(
+    Object.entries(SERVICES).map(async ([name, { baseUrl }]) => {
+      const result = await fetchSpec(baseUrl);
+      if (result.error || !result.spec) return;
+      const spec = result.spec as {
+        paths?: Record<string, Record<string, {
+          summary?: string;
+          description?: string;
+          requestBody?: {
+            content?: { "application/json"?: { schema?: { properties?: Record<string, unknown> } } };
+          };
+          responses?: Record<string, {
+            content?: { "application/json"?: { schema?: { properties?: Record<string, unknown>; $ref?: string } } };
+          }>;
+        }>>;
+        components?: { schemas?: Record<string, { properties?: Record<string, unknown> }> };
+      };
+      const schemas = spec.components?.schemas || {};
+
+      for (const [path, methods] of Object.entries(spec.paths || {})) {
+        for (const [method, details] of Object.entries(methods)) {
+          if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+          const bodyProps = details.requestBody?.content?.["application/json"]?.schema?.properties
+            ? Object.keys(details.requestBody.content["application/json"].schema.properties)
+            : undefined;
+
+          let responseFieldNames: string[] | undefined;
+          const successResp = details.responses?.["200"] || details.responses?.["201"];
+          if (successResp) {
+            const respSchema = successResp.content?.["application/json"]?.schema;
+            if (respSchema?.properties) {
+              responseFieldNames = Object.keys(respSchema.properties);
+            } else if (respSchema?.$ref) {
+              const refName = respSchema.$ref.replace("#/components/schemas/", "");
+              const resolved = schemas[refName];
+              if (resolved?.properties) responseFieldNames = Object.keys(resolved.properties);
+            }
+          }
+
+          idx.addEndpoint({
+            service: name,
+            method: method.toUpperCase(),
+            path,
+            summary: details.summary || details.description || "",
+            bodyFields: bodyProps?.length ? bodyProps : undefined,
+            responseFields: responseFieldNames?.length ? responseFieldNames : undefined,
+            pathGroup: derivePathGroup(path),
+          });
+        }
+      }
+    })
+  );
+
+  cachedSearchIndex = idx;
+  searchIndexBuiltAt = now;
+  return idx;
+}
+
+// Search endpoints across all services (MiniSearch-powered ranked full-text search)
+app.get("/search", async (req, res) => {
+  const query = req.query.q as string;
+  if (!query) {
+    return res.status(400).json({ error: "Missing required query parameter: q" });
+  }
+
+  const service = req.query.service as string | undefined;
+  const method = req.query.method as string | undefined;
+  const pathPrefix = req.query.pathPrefix as string | undefined;
+  const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
+
+  const idx = await getOrBuildSearchIndex();
+  const results = idx.search({ query, service, method, pathPrefix, limit });
+
+  res.json({
+    query,
+    resultCount: results.length,
+    indexSize: idx.size,
+    results,
+  });
 });
 
 // LLM-friendly context endpoint
