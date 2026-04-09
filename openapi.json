@@ -597,10 +597,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Max results (default: 15, max: 50)"
+              "description": "Max results (omit for all results)"
             },
             "required": false,
-            "description": "Max results (default: 15, max: 50)",
+            "description": "Max results (omit for all results)",
             "name": "limit",
             "in": "query"
           },
