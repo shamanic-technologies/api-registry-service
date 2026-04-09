@@ -216,7 +216,7 @@ registry.registerPath({
       service: z.string().optional().openapi({ description: "Filter to a specific service" }),
       method: z.string().optional().openapi({ description: "Filter by HTTP method (e.g. 'POST')" }),
       pathPrefix: z.string().optional().openapi({ description: "Filter by path prefix (e.g. '/v1/')" }),
-      limit: z.string().optional().openapi({ description: "Max results (default: 15, max: 50)" }),
+      limit: z.string().optional().openapi({ description: "Max results (omit for all results)" }),
     }),
     headers: optionalIdentityHeaders,
   },

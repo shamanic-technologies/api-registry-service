@@ -452,18 +452,16 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         service: z.string().optional().describe("Filter results to a specific service (e.g. 'campaign')"),
         method: z.string().optional().describe("Filter by HTTP method (e.g. 'POST')"),
         pathPrefix: z.string().optional().describe("Filter by path prefix (e.g. '/v1/')"),
-        limit: z.number().optional().describe("Max results to return (default: 15, max: 50)"),
+        limit: z.number().optional().describe("Max results to return (omit for all results)"),
       },
       async ({ query, service, method, pathPrefix, limit }) => {
         const idx = await getOrBuildSearchIndex(registry);
-        const maxLimit = Math.min(limit || 15, 50);
-
         const results = idx.search({
           query,
           service,
           method,
           pathPrefix,
-          limit: maxLimit,
+          limit,
         });
 
         return {
