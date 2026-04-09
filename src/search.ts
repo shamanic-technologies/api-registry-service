@@ -122,7 +122,7 @@ export class EndpointSearchIndex {
   }
 
   search(options: SearchOptions): SearchResult[] {
-    const { query, service, method, pathPrefix, limit = 20 } = options;
+    const { query, service, method, pathPrefix, limit } = options;
 
     const results = this.index.search(query, {
       filter: (result) => {
@@ -133,7 +133,8 @@ export class EndpointSearchIndex {
       },
     });
 
-    return results.slice(0, limit).map((r) => ({
+    const sliced = limit ? results.slice(0, limit) : results;
+    return sliced.map((r) => ({
       service: r.service as string,
       method: r.method as string,
       path: r.path as string,

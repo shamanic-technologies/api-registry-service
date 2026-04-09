@@ -227,7 +227,8 @@ app.get("/search", async (req, res) => {
   const service = req.query.service as string | undefined;
   const method = req.query.method as string | undefined;
   const pathPrefix = req.query.pathPrefix as string | undefined;
-  const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
+  const limitRaw = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+  const limit = limitRaw && !isNaN(limitRaw) && limitRaw > 0 ? limitRaw : undefined;
 
   const idx = await getOrBuildSearchIndex();
   const results = idx.search({ query, service, method, pathPrefix, limit });

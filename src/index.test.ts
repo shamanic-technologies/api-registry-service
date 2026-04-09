@@ -897,6 +897,12 @@ describe("EndpointSearchIndex", () => {
       expect(results.length).toBeLessThanOrEqual(1);
     });
 
+    it("returns all results when limit is omitted", () => {
+      const withLimit = idx.search({ query: "campaign", limit: 1 });
+      const withoutLimit = idx.search({ query: "campaign" });
+      expect(withoutLimit.length).toBeGreaterThan(withLimit.length);
+    });
+
     it("supports fuzzy matching", () => {
       const results = idx.search({ query: "campain" }); // typo
       expect(results.length).toBeGreaterThan(0);
