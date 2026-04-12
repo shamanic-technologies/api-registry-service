@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
-import { requireApiKey, requireIdentity } from "./auth.js";
+import { requireApiKey, requireIdentity, cleanHeader } from "./auth.js";
 import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -418,14 +418,16 @@ app.post("/call/:service", async (req, res) => {
       ...extraHeaders,
     };
 
-    // Forward identity headers (force-overwrite to prevent spoofing)
-    fetchHeaders["x-org-id"] = req.headers["x-org-id"] as string;
-    fetchHeaders["x-user-id"] = req.headers["x-user-id"] as string;
+    // Forward identity headers (force-overwrite to prevent spoofing, clean trailing commas)
+    const orgId = cleanHeader(req.headers["x-org-id"]);
+    const userId = cleanHeader(req.headers["x-user-id"]);
+    if (orgId) fetchHeaders["x-org-id"] = orgId;
+    if (userId) fetchHeaders["x-user-id"] = userId;
 
-    // Forward workflow tracking headers if present
+    // Forward workflow tracking headers if present (clean trailing commas)
     for (const h of ["x-campaign-id", "x-brand-id", "x-workflow-slug", "x-feature-slug"] as const) {
-      const val = req.headers[h];
-      if (val) fetchHeaders[h] = val as string;
+      const val = cleanHeader(req.headers[h]);
+      if (val) fetchHeaders[h] = val;
     }
 
     // Inject API key if available (force-overwrite any caller-provided key)

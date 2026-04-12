@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { Express, Request, Response } from "express";
 import { z } from "zod";
 import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
+import { cleanHeader } from "./auth.js";
 
 interface ServiceRegistry {
   getServices(): Record<string, { baseUrl: string; apiKey?: string }>;
@@ -613,8 +614,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         // No session ID — create a new session (expects initialize request)
         const newSessionId = crypto.randomUUID();
         const sessionIdentity: SessionIdentity = {
-          orgId: (req.headers["x-org-id"] as string) || "",
-          userId: (req.headers["x-user-id"] as string) || "",
+          orgId: cleanHeader(req.headers["x-org-id"]) || "",
+          userId: cleanHeader(req.headers["x-user-id"]) || "",
         };
         const mcpServer = createMcpServer(sessionIdentity);
 
