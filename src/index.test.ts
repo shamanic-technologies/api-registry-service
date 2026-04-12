@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
-import { resolveRefs, getEndpointDetails } from "./mcp.js";
 
 // Set env vars BEFORE importing app (loadServices runs on import)
 vi.stubEnv("NODE_ENV", "test");
@@ -14,8 +13,10 @@ vi.stubEnv("RUNS_SERVICE_URL", "https://runs.example.com");
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-// Dynamic import after env setup
+// Dynamic import after env setup (auth.ts reads API_KEY at module load time)
 const { default: app } = await import("./index.js");
+const { resolveRefs, getEndpointDetails } = await import("./mcp.js");
+const { cleanHeader } = await import("./auth.js");
 
 const AUTH_HEADER = {
   "x-api-key": "test-registry-key",
@@ -434,6 +435,48 @@ describe("POST /call/:service", () => {
     expect(opts.headers["x-feature-slug"]).toBe("press-outreach");
   });
 
+  it("strips trailing commas from identity headers before forwarding", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set({
+        "x-api-key": "test-registry-key",
+        "x-org-id": "b645207b-d8e9-40b0-9391-072b777cd9a9,",
+        "x-user-id": "user-uuid,",
+      })
+      .send({ method: "GET", path: "/health" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-org-id"]).toBe("b645207b-d8e9-40b0-9391-072b777cd9a9");
+    expect(opts.headers["x-user-id"]).toBe("user-uuid");
+  });
+
+  it("strips trailing commas from workflow tracking headers", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      text: async () => "{}",
+    });
+
+    await request(app)
+      .post("/call/campaign")
+      .set({
+        ...AUTH_HEADER,
+        "x-campaign-id": "camp-123,",
+        "x-brand-id": "brand-456,brand-789,",
+      })
+      .send({ method: "GET", path: "/health" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["x-campaign-id"]).toBe("camp-123");
+    expect(opts.headers["x-brand-id"]).toBe("brand-456,brand-789");
+  });
+
   it("omits workflow tracking headers when not provided", async () => {
     mockFetch.mockResolvedValueOnce({
       status: 200,
@@ -539,6 +582,44 @@ describe("DELETE /mcp", () => {
       .delete("/mcp")
       .set({ ...AUTH_HEADER, "mcp-session-id": "nonexistent" });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("cleanHeader", () => {
+  it("returns undefined for undefined input", () => {
+    expect(cleanHeader(undefined)).toBeUndefined();
+  });
+
+  it("passes through clean values unchanged", () => {
+    expect(cleanHeader("b645207b-d8e9-40b0-9391-072b777cd9a9")).toBe("b645207b-d8e9-40b0-9391-072b777cd9a9");
+  });
+
+  it("strips trailing comma", () => {
+    expect(cleanHeader("b645207b-d8e9-40b0-9391-072b777cd9a9,")).toBe("b645207b-d8e9-40b0-9391-072b777cd9a9");
+  });
+
+  it("strips trailing comma and whitespace", () => {
+    expect(cleanHeader("b645207b-d8e9-40b0-9391-072b777cd9a9, ")).toBe("b645207b-d8e9-40b0-9391-072b777cd9a9");
+  });
+
+  it("strips multiple trailing commas", () => {
+    expect(cleanHeader("uuid,,")).toBe("uuid");
+  });
+
+  it("handles array input (duplicate headers)", () => {
+    expect(cleanHeader(["uuid", ""])).toBe("uuid");
+  });
+
+  it("returns undefined for empty string", () => {
+    expect(cleanHeader("")).toBeUndefined();
+  });
+
+  it("returns undefined for comma-only input", () => {
+    expect(cleanHeader(",")).toBeUndefined();
+  });
+
+  it("preserves comma-separated brand IDs (no trailing comma)", () => {
+    expect(cleanHeader("brand-1,brand-2")).toBe("brand-1,brand-2");
   });
 });
 

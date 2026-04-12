@@ -1,5 +1,17 @@
 import { Request, Response, NextFunction } from "express";
 
+/**
+ * Strips trailing commas and whitespace from a header value.
+ * Node.js joins duplicate HTTP headers with ", " — if the duplicate value is empty,
+ * the result is "uuid," which corrupts downstream WHERE clauses.
+ */
+export function cleanHeader(value: string | string[] | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const str = Array.isArray(value) ? value.join(",") : value;
+  const cleaned = str.replace(/[,\s]+$/, "");
+  return cleaned || undefined;
+}
+
 const API_KEY = process.env.API_REGISTRY_SERVICE_API_KEY;
 
 export function requireApiKey(req: Request, res: Response, next: NextFunction) {
