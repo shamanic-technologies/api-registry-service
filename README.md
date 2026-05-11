@@ -41,11 +41,15 @@ SERVICES="api-service=https://api.example.com,campaign-service=https://campaign.
 
 ### Option 2: Individual env vars
 
+Use the `<NAME>_SERVICE_URL` suffix convention. Each service is keyed by the lowercased prefix (underscores become hyphens):
+
 ```bash
-SERVICE_API_URL=https://api.example.com
-SERVICE_CAMPAIGN_URL=https://campaign.example.com
-SERVICE_EMAIL_GEN_URL=https://emailgen.example.com
+API_SERVICE_URL=https://api.example.com
+CAMPAIGN_SERVICE_URL=https://campaign.example.com
+EMAILGEN_SERVICE_URL=https://emailgen.example.com
 ```
+
+Optionally pair each with `<NAME>_SERVICE_API_KEY` to forward an API key when calling that service.
 
 Each registered service must expose `GET /openapi.json` returning an OpenAPI 3.0 spec.
 
@@ -69,11 +73,11 @@ If `API_REGISTRY_SERVICE_API_KEY` is not set, all routes are open (development m
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
 | `GET` | `/services` | List all registered services |
-| `GET` | `/openapi` | Fetch all OpenAPI specs |
 | `GET` | `/openapi/:service` | Fetch spec for one service |
-| `GET` | `/llm-context` | LLM-friendly summary of all endpoints |
-| `POST` | `/refresh` | Refresh all cached specs |
-| `POST` | `/refresh/:service` | Refresh one service's spec |
+| `GET` | `/llm-context` | LLM-friendly overview of all services |
+| `GET` | `/llm-context/:service` | LLM-friendly endpoint list for one service (supports `?method`, `?group`, `?pathPrefix` filters) |
+| `GET` | `/search?q=...` | Ranked full-text search across all endpoints (supports `?service`, `?method`, `?pathPrefix`, `?limit`) |
+| `POST` | `/call/:service` | Proxy a call to a registered service (auto-injects API key and identity headers) |
 
 ### `/llm-context` Response Format
 
@@ -110,9 +114,10 @@ The registry exposes an MCP (Model Context Protocol) endpoint at `/mcp` so LLMs 
 | Tool | What it does | When to use |
 |------|-------------|-------------|
 | `list_services` | Returns all service names + base URLs | First step — see what exists |
-| `get_all_endpoints` | Compact summary of every endpoint across all services | You need an overview of the full API surface |
+| `get_all_endpoints` | Lightweight overview of every service (name, description, endpoint count) | You need a high-level map of the full API surface |
+| `list_service_endpoints` | List endpoints for one service, with optional method/group/pathPrefix filters | You've picked a service and want to see its endpoints |
 | `search_endpoints` | Search by keyword (e.g. "campaign", "email", "brand") | You know what you need but not which service has it |
-| `get_service_spec` | Full OpenAPI spec for one service | You need complete details (params, body, responses) |
+| `get_endpoint_details` | Full request + response schema for one endpoint, with `$ref`s resolved | You're about to call an endpoint and need exact field names |
 | `call_api` | Actually call an endpoint on any service | Execute an API call through the registry |
 
 ### Connect from Claude Desktop / Claude Code
@@ -172,21 +177,7 @@ Each registered service must expose `GET /openapi.json` returning an OpenAPI 3.0
 
 ## Caching
 
-Specs are cached for 5 minutes. Use `POST /refresh` to force a cache refresh.
-
-### Refreshing the Registry
-
-After deploying a service with updated endpoints, the registry cache refreshes automatically within 5 minutes. To force an immediate refresh:
-
-```bash
-# Refresh one service
-curl -X POST -H "X-API-Key: your-key" https://your-registry.railway.app/refresh/campaign-service
-
-# Refresh all
-curl -X POST -H "X-API-Key: your-key" https://your-registry.railway.app/refresh
-```
-
-Add this to your CI/CD pipeline as a post-deploy webhook for instant discovery.
+The registry keeps an in-memory endpoint search index with a 1-minute TTL. The index is rebuilt on the next request after expiry by re-fetching `/openapi.json` from every registered service. There is no manual refresh endpoint — updates from a redeployed service propagate within at most 1 minute.
 
 ## License
 
