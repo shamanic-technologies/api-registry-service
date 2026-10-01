@@ -14,8 +14,8 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Dynamic import after env setup (auth.ts reads API_KEY at module load time)
-const { default: app } = await import("./index.js");
-const { resolveRefs, getEndpointDetails } = await import("./mcp.js");
+const { default: app, mcpSessions } = await import("./index.js");
+const { resolveRefs, getEndpointDetails, McpSessionStore } = await import("./mcp.js");
 const { cleanHeader } = await import("./auth.js");
 
 const AUTH_HEADER = {
@@ -557,6 +557,90 @@ describe("POST /mcp", () => {
     // Should return 200 (SSE) with a valid MCP response
     expect(res.status).toBe(200);
     expect(res.headers["mcp-session-id"]).toBeDefined();
+  });
+});
+
+describe("MCP session lifecycle", () => {
+  const MCP_HEADERS = {
+    "x-api-key": "test-registry-key",
+    Accept: "application/json, text/event-stream",
+  };
+  const initialize = () =>
+    request(app)
+      .post("/mcp")
+      .set(MCP_HEADERS)
+      .send({
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0" },
+        },
+        id: 1,
+      });
+
+  it("registers a session on initialize and removes it on DELETE", async () => {
+    const before = mcpSessions.size;
+    const res = await initialize();
+    const sessionId = res.headers["mcp-session-id"];
+    expect(mcpSessions.size).toBe(before + 1);
+
+    await request(app).delete("/mcp").set({ ...MCP_HEADERS, "mcp-session-id": sessionId });
+    expect(mcpSessions.size).toBe(before);
+  });
+
+  it("does not keep a session for a non-initialize request without session ID", async () => {
+    const before = mcpSessions.size;
+    await request(app)
+      .post("/mcp")
+      .set(MCP_HEADERS)
+      .send({ jsonrpc: "2.0", method: "tools/list", id: 1 });
+    expect(mcpSessions.size).toBe(before);
+  });
+});
+
+describe("McpSessionStore", () => {
+  const fakeServer = () => ({ close: vi.fn().mockResolvedValue(undefined) });
+
+  it("evicts sessions idle longer than the TTL and closes their server", () => {
+    let now = 0;
+    const store = new McpSessionStore<string>({ idleTtlMs: 1000, maxSessions: 10, now: () => now });
+    const idle = fakeServer();
+    const active = fakeServer();
+    store.add("idle", { transport: "t1", server: idle });
+    store.add("active", { transport: "t2", server: active });
+
+    now = 900;
+    store.get("active");
+    now = 1500;
+    expect(store.sweep()).toBe(1);
+
+    expect(store.get("idle")).toBeUndefined();
+    expect(store.get("active")?.transport).toBe("t2");
+    expect(idle.close).toHaveBeenCalledOnce();
+    expect(active.close).not.toHaveBeenCalled();
+  });
+
+  it("evicts the least recently used session when over capacity", () => {
+    let now = 0;
+    const store = new McpSessionStore<string>({ idleTtlMs: 60_000, maxSessions: 2, now: () => now });
+    const a = fakeServer();
+    store.add("a", { transport: "a", server: a });
+    store.add("b", { transport: "b", server: fakeServer() });
+    now = 1;
+    store.get("a");
+    store.add("c", { transport: "c", server: fakeServer() });
+
+    expect(store.size).toBe(2);
+    expect(store.get("b")).toBeUndefined();
+    expect(store.get("a")).toBeDefined();
+    expect(a.close).not.toHaveBeenCalled();
+  });
+
+  it("close() is a no-op for unknown sessions", () => {
+    const store = new McpSessionStore<string>({ idleTtlMs: 1000, maxSessions: 10 });
+    expect(() => store.close("missing", "test")).not.toThrow();
   });
 });
 

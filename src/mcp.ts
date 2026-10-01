@@ -281,9 +281,83 @@ interface SessionIdentity {
   userId: string;
 }
 
-export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
-  const sessionIdentities = new Map<string, SessionIdentity>();
+// Sessions are only removed when a client sends DELETE /mcp, which most clients never do.
+// Without eviction every session (McpServer + transport) stays in memory forever and the
+// process dies of heap OOM after a few hours. Evict idle sessions and cap the total.
+export const MCP_SESSION_IDLE_TTL_MS = 30 * 60_000;
+export const MCP_MAX_SESSIONS = 200; // ~570 KB each: worst case ~115 MB of a 512 MB heap
+const MCP_SESSION_SWEEP_INTERVAL_MS = 60_000;
+
+interface Closable {
+  close(): Promise<void>;
+}
+
+interface McpSession<T> {
+  transport: T;
+  server: Closable;
+  lastSeenAt: number;
+}
+
+export class McpSessionStore<T> {
+  // Map iteration order = insertion order; get() re-inserts, so the first entry is the least recently used.
+  private sessions = new Map<string, McpSession<T>>();
+
+  constructor(
+    private readonly opts: { idleTtlMs: number; maxSessions: number; now?: () => number }
+  ) {}
+
+  private now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
+  }
+
+  get size(): number {
+    return this.sessions.size;
+  }
+
+  get(id: string): McpSession<T> | undefined {
+    const session = this.sessions.get(id);
+    if (!session) return undefined;
+    session.lastSeenAt = this.now();
+    this.sessions.delete(id);
+    this.sessions.set(id, session);
+    return session;
+  }
+
+  add(id: string, session: Omit<McpSession<T>, "lastSeenAt">): void {
+    this.sessions.set(id, { ...session, lastSeenAt: this.now() });
+    while (this.sessions.size > this.opts.maxSessions) {
+      this.close(this.sessions.keys().next().value as string, "capacity");
+    }
+  }
+
+  close(id: string, reason: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    this.sessions.delete(id);
+    session.server.close().catch((err) => {
+      console.error(`Failed to close MCP session ${id} (${reason}):`, err);
+    });
+  }
+
+  sweep(): number {
+    const cutoff = this.now() - this.opts.idleTtlMs;
+    let evicted = 0;
+    for (const [id, session] of this.sessions) {
+      if (session.lastSeenAt < cutoff) {
+        this.close(id, "idle");
+        evicted++;
+      }
+    }
+    return evicted;
+  }
+}
+
+export function registerMcpEndpoint(app: Express, registry: ServiceRegistry): McpSessionStore<StreamableHTTPServerTransport> {
+  const sessions = new McpSessionStore<StreamableHTTPServerTransport>({
+    idleTtlMs: MCP_SESSION_IDLE_TTL_MS,
+    maxSessions: MCP_MAX_SESSIONS,
+  });
+  setInterval(() => sessions.sweep(), MCP_SESSION_SWEEP_INTERVAL_MS).unref();
 
   function createMcpServer(identity: SessionIdentity): McpServer {
     const server = new McpServer({
@@ -599,8 +673,8 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
 
       if (sessionId) {
         // Client provided a session ID — look it up
-        const transport = sessions.get(sessionId);
-        if (!transport) {
+        const session = sessions.get(sessionId);
+        if (!session) {
           // Session expired or server restarted — tell client to re-initialize
           return res.status(404).json({
             jsonrpc: "2.0",
@@ -609,7 +683,7 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
           });
         }
         res.setHeader("mcp-session-id", sessionId);
-        await transport.handleRequest(req, res, req.body);
+        await session.transport.handleRequest(req, res, req.body);
       } else {
         // No session ID — create a new session (expects initialize request)
         const newSessionId = crypto.randomUUID();
@@ -621,17 +695,19 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
+          // Only a successful initialize registers the session
           onsessioninitialized: (id) => {
-            sessions.set(id, transport);
+            sessions.add(id, { transport, server: mcpServer });
           },
         });
 
-        sessions.set(newSessionId, transport);
-        sessionIdentities.set(newSessionId, sessionIdentity);
         await mcpServer.connect(transport);
 
         res.setHeader("mcp-session-id", newSessionId);
         await transport.handleRequest(req, res, req.body);
+
+        // Not an initialize request (or it failed): nothing references this server, release it
+        if (!transport.sessionId) await mcpServer.close();
       }
     } catch (error) {
       console.error("MCP request error:", error);
@@ -656,26 +732,23 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry) {
         id: null,
       });
     }
-    const transport = sessions.get(sessionId);
-    if (!transport) {
+    const session = sessions.get(sessionId);
+    if (!session) {
       return res.status(404).json({
         jsonrpc: "2.0",
         error: { code: -32600, message: "Session not found" },
         id: null,
       });
     }
-    await transport.handleRequest(req, res);
+    await session.transport.handleRequest(req, res);
   });
 
   // MCP endpoint - DELETE to close session
   app.delete("/mcp", async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && sessions.has(sessionId)) {
-      const transport = sessions.get(sessionId);
-      if (transport) await transport.close();
-      sessions.delete(sessionId);
-      sessionIdentities.delete(sessionId);
-    }
+    if (sessionId) sessions.close(sessionId, "client DELETE");
     res.status(200).json({ success: true });
   });
+
+  return sessions;
 }

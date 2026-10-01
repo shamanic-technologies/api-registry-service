@@ -463,7 +463,7 @@ app.post("/call/:service", async (req, res) => {
 });
 
 // Register MCP endpoint for LLM access
-registerMcpEndpoint(app, {
+export const mcpSessions = registerMcpEndpoint(app, {
   getServices: () => SERVICES,
   fetchSpec,
 });
