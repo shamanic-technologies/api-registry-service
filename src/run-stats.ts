@@ -34,7 +34,9 @@ const TaskOutcomesResponseSchema = z.object({
 
 export const STATS_SAMPLE = 200;
 export const STATS_TTL_MS = 15 * 60_000;
-const STATS_TIMEOUT_MS = 120_000;
+// runs-service lets this query run up to 290s (api-service takes 30-120s on a busy box);
+// stay under undici's 300s headers timeout.
+const STATS_TIMEOUT_MS = 295_000;
 
 export type OutcomesResult =
   | { ok: true; outcomes: TaskOutcome[]; fetchedAt: string }

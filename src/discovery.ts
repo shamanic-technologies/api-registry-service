@@ -1,5 +1,5 @@
 import {
-  ROI_NOTE,
+  ROI_BASIS,
   extractOperations,
   joinStats,
   matchesQuery,
@@ -8,7 +8,8 @@ import {
   sortByRuns,
   NOT_LINKED,
 } from "./catalog.js";
-import { STATS_SAMPLE, type TaskOutcomesCache, type OutcomesResult } from "./run-stats.js";
+import { STATS_SAMPLE, type TaskOutcomesCache } from "./run-stats.js";
+import type { StepCatalogCache } from "./steps.js";
 import { getEndpointDetails } from "./mcp.js";
 
 // The three discovery levels, shared by the HTTP routes (/discover/*) and the MCP tools
@@ -47,6 +48,7 @@ export class Discovery {
   constructor(
     private readonly registry: DiscoveryRegistry,
     private readonly outcomes: TaskOutcomesCache,
+    private readonly steps: StepCatalogCache,
   ) {}
 
   private async spec(baseUrl: string): Promise<{ spec: unknown; error?: string }> {
@@ -103,8 +105,8 @@ export class Discovery {
     if (r.error || !r.spec) return { status: 502 as const, body: { error: `Failed to fetch spec for "${service}"`, detail: r.error } };
 
     const ops = extractOperations(r.spec);
-    const stats = await this.outcomes.get(runsServiceName(service));
-    const joined = stats.ok ? joinStats(service, ops, stats.outcomes) : null;
+    const [stats, steps] = await Promise.all([this.outcomes.get(runsServiceName(service)), this.steps.get()]);
+    const joined = stats.ok ? joinStats(service, ops, stats.outcomes, steps.ok ? steps.steps : undefined) : null;
     const rows = joined ? sortByRuns(joined.endpoints) : ops.map((op) => ({ method: op.method, path: op.path, summary: op.summary, stats: "unavailable" as string }));
 
     const method = opts.method?.toUpperCase();
@@ -123,7 +125,8 @@ export class Discovery {
         ...(shown.length < matched.length ? { _more: "Raise limit, or narrow with q / method." } : {}),
         statsBasis: STATS_BASIS,
         ...(stats.ok ? { statsAsOf: stats.fetchedAt } : { statsError: stats.error }),
-        roi: ROI_NOTE,
+        roiBasis: ROI_BASIS,
+        ...(steps.ok ? {} : { roiError: steps.error }),
         endpoints: shown,
         ...(unlinked.length
           ? { unlinkedTasks: unlinked.slice(0, UNLINKED_SHOWN), unlinkedTaskCount: unlinked.length }
@@ -149,10 +152,12 @@ export class Discovery {
     const entry = this.registry.getServices()[service];
     const r = await this.spec(entry.baseUrl);
     const ops = extractOperations(r.spec);
-    const stats: OutcomesResult = await this.outcomes.get(runsServiceName(service));
+    const [stats, steps] = await Promise.all([this.outcomes.get(runsServiceName(service)), this.steps.get()]);
     // Join against ALL operations: a path task must land on its most literal template.
     const row = stats.ok
-      ? joinStats(service, ops, stats.outcomes).endpoints.find((e) => e.method === method.toUpperCase() && e.path === path)
+      ? joinStats(service, ops, stats.outcomes, steps.ok ? steps.steps : undefined).endpoints.find(
+          (e) => e.method === method.toUpperCase() && e.path === path,
+        )
       : undefined;
     const runStats = stats.ok ? (row?.stats ?? NOT_LINKED) : stats.error;
 
@@ -162,7 +167,8 @@ export class Discovery {
         ...details,
         stats: runStats,
         ...(runStats === NOT_LINKED ? {} : { statsBasis: STATS_BASIS }),
-        roi: ROI_NOTE,
+        ...(row?.roi ? { roi: row.roi, roiBasis: ROI_BASIS } : { roi: "produces no funnel step: cost only" }),
+        ...(steps.ok ? {} : { roiError: steps.error }),
         testRun: TEST_RUN,
       },
     };

@@ -2,7 +2,9 @@
 //   Level 1: every service, one line each.
 //   Level 2: one service's endpoints, one line each, with measured run stats.
 //   Level 3: one endpoint's full doc + its stats + how to test-run it.
-// No I/O here: callers pass specs and runs-service task stats in.
+// No I/O here: callers pass specs, runs-service task stats and step values in.
+
+import { parseProducedBy, type StepInfo } from "./steps.js";
 
 /** One-line description per registry service name. Shown at level 1. */
 export const SERVICE_DESCRIPTIONS: Record<string, string> = {
@@ -57,6 +59,12 @@ export function runsServiceName(registryName: string): string {
  * openapi (string or string[]); that declaration wins over this table.
  * Services whose task names are "METHOD /path" (api, expert-quotes-requests,
  * journalists-quotes) need no entry: they are matched by path.
+ * A name ending in "*" is a prefix (`email-*` = every `email-<template>` task).
+ * Not linked on purpose: crons, sweeps and background children (crm *.sync,
+ * people.build, social engagement-refresh, human sweeps); google opens ONE `request`
+ * run per request on every route, so its runs cannot tell endpoints apart. They show
+ * under `unlinkedTasks`. Some linked tasks are ALSO fired by a timer (billing dunning,
+ * instantly retry-stuck, crm *.sync.trigger from box crons): their stats include it.
  */
 export const ENDPOINT_TASKS: Record<string, Record<string, string[]>> = {
   apollo: {
@@ -76,6 +84,7 @@ export const ENDPOINT_TASKS: Record<string, Record<string, string[]>> = {
     "POST /orgs/judgments": ["judgments"],
     "POST /internal/platform-judgments": ["platform-judgments"],
     "POST /orgs/images/generate": ["generate-image"],
+    "POST /internal/platform-images/generate": ["generate-image"],
     "POST /orgs/rag/score": ["rag-score"],
     "POST /orgs/rag/embed": ["rag-embed"],
     "POST /chat": ["chat"],
@@ -83,25 +92,153 @@ export const ENDPOINT_TASKS: Record<string, Record<string, string[]>> = {
   scraping: {
     "POST /scrape": ["scrape"],
     "POST /map": ["map"],
+    "POST /extract": ["extract"],
   },
   postmark: {
     "POST /orgs/send": ["email-send"],
+    "POST /orgs/send/batch": ["email-send"],
   },
   "content-generation": {
     "POST /generate": ["single-generation"],
+    "PUT /prompt-assignments": ["prompt-assignment-neutrality"],
   },
   lead: {
     "POST /orgs/buffer/next": ["lead-serve"],
+    "POST /orgs/brands/{brandId}/offers/{offerId}/qualification/suggestions": ["qualification-suggestions"],
+    "POST /orgs/brands/{brandId}/offers/{offerId}/qualification/criteria/{criterionId}/sample": ["qualification-sample"],
   },
   cloudflare: {
     "POST /upload": ["upload"],
     "POST /upload/base64": ["upload-base64"],
     "POST /internal/upload/base64": ["upload-base64-platform"],
+    "GET /files/{id}": ["get-file"],
+    "DELETE /files/{id}": ["delete-file"],
+  },
+  brand: {
+    "POST /orgs/brands/extract-fields": ["field-extraction"],
+    "POST /internal/brands/extract-fields": ["field-extraction"],
+    "POST /orgs/brands/extract-images": ["image-extraction"],
+    "POST /orgs/brands/{brandId}/icp/suggest": ["icp-suggestion"],
+    "POST /orgs/brands/{brandId}/offers/proposals": ["offer-proposal"],
+    "POST /orgs/brands/{brandId}/competitors/discover": ["competitor-discovery"],
+    "POST /internal/brands/{brandId}/linkedin-page/discover": ["own-linkedin-page-discovery"],
+  },
+  campaign: {
+    // campaign runs are named by the campaign id (normalized to {id} by runs-service)
+    "POST /start-run": ["{id}"],
+  },
+  crm: {
+    "POST /orgs/contacts/upload": ["contacts.upload"],
+    "POST /orgs/contacts/serve-next": ["contacts.serve-next"],
+    "GET /orgs/contacts/serve-stats": ["contacts.serve-stats"],
+    "GET /orgs/contacts": ["contacts.list"],
+    "GET /orgs/contacts/uploads": ["contacts.uploads.list"],
+    "POST /internal/contacts/promote": ["contacts.promote.reprocess"],
+    "POST /internal/transfer-brand": ["brand.transfer"],
+    "POST /orgs/gohighlevel/connections": ["gohighlevel.connections.create"],
+    "PATCH /orgs/gohighlevel/connections/{id}": ["gohighlevel.connections.update"],
+    "DELETE /orgs/gohighlevel/connections/{id}": ["gohighlevel.connections.delete"],
+    "GET /orgs/gohighlevel/connections": ["gohighlevel.connections.list"],
+    "GET /orgs/gohighlevel/contacts": ["gohighlevel.contacts.list"],
+    "GET /orgs/gohighlevel/contacts/origins": ["gohighlevel.contacts.origins"],
+    "GET /orgs/gohighlevel/opportunities": ["gohighlevel.opportunities.list"],
+    "GET /orgs/gohighlevel/funnel-reach": ["gohighlevel.funnel-reach.read"],
+    "GET /internal/gohighlevel/funnel-reach": ["gohighlevel.funnel-reach.read"],
+    "GET /orgs/gohighlevel/stage-meanings": ["gohighlevel.stage-meanings.list"],
+    "POST /internal/gohighlevel/sync": ["gohighlevel.sync.trigger"],
+    "POST /internal/gohighlevel/rebuild": ["gohighlevel.rebuild.trigger"],
+    "POST /orgs/matrix/connections": ["matrix.connections.create"],
+    "PATCH /orgs/matrix/connections/{id}": ["matrix.connections.update"],
+    "GET /orgs/matrix/connections": ["matrix.connections.list"],
+    "GET /orgs/matrix/leads": ["matrix.leads.list"],
+    "POST /internal/matrix/sync": ["matrix.sync.trigger"],
+    "POST /internal/matrix/rebuild": ["matrix.rebuild.trigger"],
+    "POST /orgs/matrix/links": ["matrix.links.start"],
+    "GET /orgs/matrix/links": ["matrix.links.list"],
+    "DELETE /orgs/matrix/links/{channel}": ["matrix.links.unlink"],
+    "GET /orgs/people": ["people.list"],
+    "GET /orgs/people/timeline": ["people.timeline"],
+    "POST /orgs/people/sync": ["people.sync"],
+    "POST /internal/people/sync": ["people.sync.trigger"],
+    "GET /internal/people/facts": ["people.facts.read"],
+    "POST /internal/posthog/sync": ["posthog.sync.trigger"],
+    "POST /internal/stripe/sync": ["stripe.sync.trigger"],
+    "POST /orgs/posthog/connections": ["posthog.connections.create"],
+    "GET /orgs/posthog/connections": ["posthog.connections.list"],
+    "PATCH /orgs/posthog/connections/{id}": ["posthog.connections.update"],
+    "DELETE /orgs/posthog/connections/{id}": ["posthog.connections.delete"],
+    "POST /orgs/stripe/connections": ["stripe.connections.create"],
+    "GET /orgs/stripe/connections": ["stripe.connections.list"],
+    "PATCH /orgs/stripe/connections/{id}": ["stripe.connections.update"],
+    "DELETE /orgs/stripe/connections/{id}": ["stripe.connections.delete"],
+  },
+  human: {
+    "POST /humans/{id}/extract": ["methodology-extraction"],
+    "POST /orgs/audiences/portfolio": ["audience-portfolio-launch"],
+    "GET /orgs/audiences/{id}/preview/companies": ["audience-preview-companies"],
+    "POST /orgs/audiences/split/estimate": ["audience-split-estimate"],
+    "POST /orgs/audiences/split/confirm": ["audience-target-draft"],
+    "POST /orgs/audiences/suggest": ["audience-target-draft"],
+    "POST /orgs/source-campaigns/state": ["source-campaign-audience"],
+    "POST /internal/competitor-engagement-audiences": ["competitor-engagement-audience"],
+    "POST /internal/audience-refill": ["audience-refill"],
+  },
+  billing: {
+    "POST /internal/dunning/tick": ["dunning-followup"],
+    "POST /internal/payment-methods/lost": ["unpaid-debt-notification"],
+  },
+  stripe: {
+    "POST /v1/webhooks": ["charge.*"],
+  },
+  instantly: {
+    // also re-sent by the retry-stuck / restore-followups sweeps under the same names
+    "POST /orgs/send": ["email-send-step-*"],
+  },
+  social: {
+    "POST /internal/daily-runs": ["start-daily-run"],
+    "GET /internal/daily-runs/{id}": ["get-daily-run"],
+    "GET /internal/comments": ["list-comments"],
+    "GET /internal/reposts": ["list-reposts"],
+    "GET /internal/published-items/counts": ["published-counts"],
+    "GET /internal/published-items": ["list-published"],
+    "POST /internal/published-items/queue/{slug}": ["published-queue-report"],
+    "POST /internal/published-items": ["published-manual"],
+    "GET /internal/brands/{brandId}/linkedin-posts": ["brand-linkedin-posts"],
+    "GET /internal/users/{userId}/linkedin-posts": ["user-linkedin-posts"],
+  },
+  "transactional-email": {
+    "POST /send": ["email-*"],
+    "POST /mailing-lists/{slug}/releases": ["mailing-list-release-*"],
+    "POST /mailing-lists/{slug}/updates": ["mailing-list-update-*"],
+  },
+  twilio: {
+    "POST /calls": ["place-call"],
+    "POST /send": ["send-sms"],
+    "POST /send/batch": ["send-sms"],
+    "POST /send/whatsapp": ["whatsapp-send"],
+    "POST /webhooks/twilio/whatsapp": ["whatsapp-inbound"],
+  },
+  workflow: {
+    "POST /workflows/{id}/execute": ["execute-workflow"],
+    "POST /workflows/by-slug/{workflowSlug}/execute": ["execute-workflow"],
   },
 };
 
-export const ROI_NOTE =
-  "ROI not available yet: features-service does not serve a value per step, so no endpoint output can be valued.";
+/**
+ * Endpoint -> the funnel step its output IS (features-service step id), read from the
+ * producers' code on 2026-10-10. A producer can declare it itself: `x-produces-step` on
+ * the operation in its openapi, or a declared step whose `producedBy` is
+ * "<service> METHOD /path" (features-service POST /internal/catalogue/steps). Both win
+ * over this table. Endpoints producing no step show cost only.
+ */
+// apollo POST /search/next is NOT here: one call returns a PAGE of unenriched teasers,
+// not one found lead, so valuing it at one Lead found per call would be invented.
+export const ENDPOINT_STEPS: Record<string, Record<string, string>> = {
+  lead: { "POST /orgs/buffer/next": "lead_found" }, // serves one qualified lead per call
+};
+
+export const ROI_BASIS =
+  "roi = valueUsd of the step the endpoint produces (features-service: fleet median lifetime revenue x best rated route to Paid client) / avgCostUsd per call. Endpoints producing no step show cost only.";
 
 export const HTTP_METHODS = ["get", "post", "put", "patch", "delete"] as const;
 
@@ -118,6 +255,7 @@ export interface SpecOperation {
   path: string;
   summary: string; // one line
   runTasks?: string[]; // from x-run-task
+  producesStep?: string; // from x-produces-step
 }
 
 interface RawSpec {
@@ -133,7 +271,7 @@ export function extractOperations(spec: unknown): SpecOperation[] {
     if (path === "/health" || path.startsWith("/health/") || path === "/openapi.json") continue;
     for (const [method, raw] of Object.entries(methods ?? {})) {
       if (!(HTTP_METHODS as readonly string[]).includes(method)) continue;
-      const op = (raw ?? {}) as { summary?: string; description?: string; "x-run-task"?: unknown };
+      const op = (raw ?? {}) as { summary?: string; description?: string; "x-run-task"?: unknown; "x-produces-step"?: unknown };
       const xTask = op["x-run-task"];
       const runTasks =
         typeof xTask === "string" ? [xTask]
@@ -144,6 +282,7 @@ export function extractOperations(spec: unknown): SpecOperation[] {
         path,
         summary: oneLine(op.summary || op.description),
         ...(runTasks?.length ? { runTasks } : {}),
+        ...(typeof op["x-produces-step"] === "string" ? { producesStep: op["x-produces-step"] } : {}),
       });
     }
   }
@@ -193,7 +332,13 @@ export interface RunStats {
 }
 
 export const NO_RUNS_YET = "no runs yet";
-export const NOT_LINKED = "not measured: no run task linked to this endpoint yet";
+// Every run-creating code path of every service that records runs was read on
+// 2026-10-10 and linked above, so an endpoint with no linked task opens no run.
+export const NOT_LINKED = "no run of its own: this endpoint opens no run, so no metered cost of its own";
+
+/** Services that open ONE run task for every request: runs cannot tell endpoints apart. */
+export const SHARED_RUN_TASK: Record<string, string> = { google: "request" };
+export const SERVICE_TRACKS_NO_RUNS = "no runs recorded: this service tracks no runs, so no metered cost";
 
 /** Merge the outcomes of the tasks behind one endpoint. Exact: sums, then ratios. */
 export function mergeOutcomes(outcomes: TaskOutcome[]): RunStats | null {
@@ -261,11 +406,42 @@ export function matchPathTask(task: string, ops: SpecOperation[]): SpecOperation
   return best;
 }
 
+export interface EndpointRoi {
+  step: string;
+  stepName: string;
+  valueUsd: number | null;
+  roi: number | null;
+  note?: string;
+}
+
 export interface EndpointWithStats {
   method: string;
   path: string;
   summary: string;
   stats: RunStats | string;
+  roi?: EndpointRoi;
+}
+
+/** The step id an endpoint produces: x-produces-step, then a declared producedBy, then ENDPOINT_STEPS. */
+export function producedStep(service: string, op: SpecOperation, steps: Map<string, StepInfo>): string | undefined {
+  if (op.producesStep) return op.producesStep;
+  const key = `${op.method} ${op.path}`;
+  for (const s of steps.values()) {
+    const p = parseProducedBy(s.producedBy);
+    if (p && p.service === service && p.endpoint === key) return s.id;
+  }
+  return ENDPOINT_STEPS[service]?.[key];
+}
+
+/** ROI of one call: value of the produced step / average cost per call. Never invented. */
+export function roiFor(stepId: string, steps: Map<string, StepInfo>, stats: RunStats | string): EndpointRoi {
+  const step = steps.get(stepId);
+  if (!step) return { step: stepId, stepName: stepId, valueUsd: null, roi: null, note: "step not in the features-service catalogue" };
+  const base = { step: step.id, stepName: step.name, valueUsd: step.valueUsd };
+  if (step.valueUsd === null) return { ...base, roi: null, note: "step has no value yet" };
+  if (typeof stats === "string") return { ...base, roi: null, note: `no cost measured (${stats})` };
+  if (stats.avgCostUsd <= 0) return { ...base, roi: null, note: "measured cost per call is $0: ROI unbounded" };
+  return { ...base, roi: Math.round((step.valueUsd / stats.avgCostUsd) * 100) / 100 };
 }
 
 export interface UnlinkedTask {
@@ -280,23 +456,28 @@ export interface UnlinkedTask {
  * Join a service's operations with its runs-service task outcomes.
  * Linking, in order: the producer's `x-run-task`, ENDPOINT_TASKS, "METHOD /path" task names.
  * An endpoint is "linked" when one of those names a task for it; a linked endpoint
- * with no runs says "no runs yet", an unlinked one says it is not measured.
+ * with no runs says "no runs yet", an unlinked one says it opens no run of its own.
  * Tasks that no endpoint claims are returned as `unlinked` (crons, internal jobs).
  */
 export function joinStats(
   service: string,
   ops: SpecOperation[],
   outcomes: TaskOutcome[],
+  steps?: Map<string, StepInfo>,
 ): { endpoints: EndpointWithStats[]; unlinked: UnlinkedTask[] } {
   const byTask = new Map(outcomes.map((o) => [o.taskName, o]));
   const curated = ENDPOINT_TASKS[service] ?? {};
   const claimed = new Set<string>();
   const tasksOf = new Map<SpecOperation, string[]>();
 
+  // "email-*" = every observed task with that prefix
+  const expand = (names: string[]) =>
+    names.flatMap((n) => (n.endsWith("*") ? outcomes.map((o) => o.taskName).filter((t) => t.startsWith(n.slice(0, -1))) : [n]));
   for (const op of ops) {
-    const names = op.runTasks ?? curated[`${op.method} ${op.path}`];
-    if (names) {
-      tasksOf.set(op, [...names]);
+    const declared = op.runTasks ?? curated[`${op.method} ${op.path}`];
+    if (declared) {
+      const names = expand(declared);
+      tasksOf.set(op, names);
       names.forEach((n) => claimed.add(n));
     }
   }
@@ -315,9 +496,17 @@ export function joinStats(
   const endpoints = ops.map((op): EndpointWithStats => {
     const base = { method: op.method, path: op.path, summary: op.summary };
     const names = tasksOf.get(op);
-    if (!names && !pathConvention) return { ...base, stats: NOT_LINKED };
-    const merged = mergeOutcomes((names ?? []).map((n) => byTask.get(n)).filter((o): o is TaskOutcome => !!o));
-    return { ...base, stats: merged ?? NO_RUNS_YET };
+    const shared = SHARED_RUN_TASK[service];
+    const stats: RunStats | string =
+      outcomes.length === 0
+        ? SERVICE_TRACKS_NO_RUNS
+        : !names && shared
+        ? `not split per endpoint: every ${service} request shares the run task "${shared}" (see unlinkedTasks for the service-wide figure)`
+        : !names && !pathConvention
+        ? NOT_LINKED
+        : mergeOutcomes((names ?? []).map((n) => byTask.get(n)).filter((o): o is TaskOutcome => !!o)) ?? NO_RUNS_YET;
+    const stepId = steps ? producedStep(service, op, steps) : undefined;
+    return { ...base, stats, ...(stepId && steps ? { roi: roiFor(stepId, steps, stats) } : {}) };
   });
 
   const unlinked = outcomes
