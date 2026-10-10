@@ -421,3 +421,141 @@ registry.registerPath({
     },
   },
 });
+
+// -- Agent discovery: GET /discover/* (three levels, each page ~2k tokens) --
+
+const RunStatsSchema = z
+  .object({
+    successRate: z.number().nullable().describe("completed / (completed + failed) over the sampled runs; null when none ended"),
+    avgCostUsd: z.number().describe("Mean whole-run cost in USD: the run's own and every sub-call's actual costs, at catalogue price"),
+    avgDurationMs: z.number().nullable().describe("Mean duration of the sampled COMPLETED runs; null when none completed"),
+    runs: z.number().describe("All-time run count of the task(s) behind this endpoint, all orgs"),
+    sampled: z.number().describe("Runs measured: the most recent ones, at most 200 per task"),
+    lastRunAt: z.string().nullable(),
+    tasks: z.array(z.string()).optional().describe("Run task names merged into this endpoint, when more than one"),
+  })
+  .openapi("RunStats");
+
+const EndpointStatsField = z
+  .union([RunStatsSchema, z.string()])
+  .describe("Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'");
+
+const DiscoverServicesResponseSchema = z
+  .object({
+    serviceCount: z.number(),
+    matched: z.number(),
+    services: z.array(
+      z.object({
+        name: z.string(),
+        description: z.string().describe("One line"),
+        endpoints: z.number().nullable().describe("Endpoint count (health/openapi excluded); null when the spec is unreachable"),
+        error: z.string().optional(),
+      }),
+    ),
+    _next: z.string(),
+  })
+  .openapi("DiscoverServicesResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/discover/services",
+  summary: "Level 1: every running service with a one-line description",
+  description: "Start here to explore the platform. Each service: name, one-line description, endpoint count. Next: GET /discover/services/{service}/endpoints.",
+  request: {
+    query: z.object({
+      q: z.string().optional().describe("Text filter on name + description; every word must match"),
+      limit: z.string().optional().describe("Max services returned (default all)"),
+    }),
+  },
+  responses: {
+    200: { description: "Services", content: { "application/json": { schema: DiscoverServicesResponseSchema } } },
+    401: unauthorizedResponse,
+  },
+});
+
+const DiscoverEndpointsResponseSchema = z
+  .object({
+    service: z.string(),
+    description: z.string(),
+    endpointCount: z.number(),
+    matched: z.number(),
+    shown: z.number(),
+    _more: z.string().optional(),
+    statsBasis: z.string().describe("How the stats are computed"),
+    statsAsOf: z.string().optional(),
+    statsError: z.string().optional().describe("Present when runs-service stats could not be read; endpoints then carry stats 'unavailable'"),
+    roi: z.string().describe("ROI status: not served until features-service serves a value per step"),
+    endpoints: z.array(
+      z.object({ method: z.string(), path: z.string(), summary: z.string().describe("One line"), stats: EndpointStatsField }),
+    ),
+    unlinkedTasks: z
+      .array(
+        z.object({
+          task: z.string(),
+          runs: z.number(),
+          successRate: z.number().nullable(),
+          avgCostUsd: z.number(),
+          avgDurationMs: z.number().nullable(),
+        }),
+      )
+      .optional()
+      .describe("Run tasks of this service that no endpoint claims (crons, internal jobs), top 5 by runs"),
+    unlinkedTaskCount: z.number().optional(),
+    _next: z.string(),
+  })
+  .openapi("DiscoverEndpointsResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/discover/services/{service}/endpoints",
+  summary: "Level 2: a service's endpoints with avg cost, duration and success rate",
+  description: "One line per endpoint plus stats measured on real runs across all orgs. Most-used first; 20 per page by default. Next: GET /discover/services/{service}/endpoint?method=&path=.",
+  request: {
+    params: z.object({ service: z.string() }),
+    query: z.object({
+      q: z.string().optional().describe("Text filter on method + path + summary; every word must match"),
+      method: z.string().optional(),
+      limit: z.string().optional().describe("Default 20, max 200"),
+    }),
+  },
+  responses: {
+    200: { description: "Endpoints with stats", content: { "application/json": { schema: DiscoverEndpointsResponseSchema } } },
+    401: unauthorizedResponse,
+    404: { description: "Service not found", content: { "application/json": { schema: ErrorSchema } } },
+    502: { description: "Service spec unreachable", content: { "application/json": { schema: ErrorSchema } } },
+  },
+});
+
+const DiscoverEndpointResponseSchema = z
+  .object({
+    service: z.string(),
+    method: z.string(),
+    path: z.string(),
+    summary: z.string().optional(),
+    description: z.string().optional(),
+    parameters: z.array(z.object({}).passthrough()).optional(),
+    requestBody: z.object({}).passthrough().optional(),
+    responses: z.object({}).passthrough().optional(),
+    stats: EndpointStatsField,
+    statsBasis: z.string().optional(),
+    roi: z.string(),
+    testRun: z.object({ mcp: z.string(), http: z.string(), billing: z.string() }),
+  })
+  .openapi("DiscoverEndpointResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/discover/services/{service}/endpoint",
+  summary: "Level 3: one endpoint's full doc, run stats, and how to test-run it",
+  description: "Full parameters, request and response schemas ($refs resolved, error responses included), the endpoint's run stats, and how to run it now via POST /call/{service} (a real run, billed to the calling org).",
+  request: {
+    params: z.object({ service: z.string() }),
+    query: z.object({ method: z.string(), path: z.string() }),
+  },
+  responses: {
+    200: { description: "Endpoint doc + stats", content: { "application/json": { schema: DiscoverEndpointResponseSchema } } },
+    400: { description: "Missing method or path", content: { "application/json": { schema: ErrorSchema } } },
+    401: unauthorizedResponse,
+    404: { description: "Service, path or method not found", content: { "application/json": { schema: ErrorSchema } } },
+  },
+});

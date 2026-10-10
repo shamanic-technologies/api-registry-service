@@ -101,6 +101,26 @@ Optimized for LLM consumption — compact, no header params, includes body field
 }
 ```
 
+## Agent discovery (3 levels, each page ~2k tokens)
+
+Built for an agent that composes a workflow on the fly without flooding its context.
+
+| Level | MCP tool | HTTP | Returns |
+|---|---|---|---|
+| 1 | `discover_services(q?, limit?)` | `GET /discover/services?q=&limit=` | Every service: name, one-line description, endpoint count |
+| 2 | `discover_service_endpoints(service, q?, method?, limit?)` | `GET /discover/services/{service}/endpoints?q=&method=&limit=` | Endpoints, one line each, with `stats` = `{successRate, avgCostUsd, avgDurationMs, runs, sampled, lastRunAt}` or `"no runs yet"` / `"not measured: ..."`; most-used first, 20 per page; `roi` status; run tasks no endpoint claims (`unlinkedTasks`) |
+| 3 | `discover_endpoint(service, method, path)` | `GET /discover/services/{service}/endpoint?method=&path=` | Full doc ($refs resolved, error responses included), stats, and how to test-run it |
+
+Test-run = `call_api` (MCP) or `POST /call/{service}` (HTTP): a real run, billed to the calling org.
+
+**Stats source**: runs-service `GET /internal/stats/task-outcomes?serviceName=<runs name>&sample=200` (fleet-wide, all orgs; last 200 runs per task; cost = whole-subtree actual cost at catalogue price). Cached 15 min, refreshed in the background (stale-while-revalidate, warmed at boot).
+
+**Endpoint to run task**, in order: the producer's `x-run-task` operation extension (string or string[]) in its openapi; `ENDPOINT_TASKS` in `src/catalog.ts`; task names shaped `METHOD /path` (api-service), matched to the most literal path template. Producers: declare `x-run-task` on every operation that creates a run, it wins over the table.
+
+**Service descriptions** (level 1) live in `SERVICE_DESCRIPTIONS` (`src/catalog.ts`); a new service needs a line there (a test pins every service running on the box).
+
+**ROI**: not served until features-service serves a value per step; level 2/3 say so in `roi`.
+
 ## MCP Server
 
 The registry exposes an MCP (Model Context Protocol) endpoint at `/mcp` so LLMs can discover and call APIs directly.
@@ -114,6 +134,7 @@ The registry exposes an MCP (Model Context Protocol) endpoint at `/mcp` so LLMs 
 | `search_endpoints` | Search by keyword (e.g. "campaign", "email", "brand") | You know what you need but not which service has it |
 | `get_service_spec` | Full OpenAPI spec for one service | You need complete details (params, body, responses) |
 | `call_api` | Actually call an endpoint on any service | Execute an API call through the registry |
+| `discover_services` / `discover_service_endpoints` / `discover_endpoint` | Progressive discovery with run stats (see Agent discovery) | Building a workflow: what exists, what it costs, how it behaves |
 
 ### Connect from Claude Desktop / Claude Code
 
