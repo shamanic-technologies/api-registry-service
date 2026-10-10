@@ -108,7 +108,7 @@ Built for an agent that composes a workflow on the fly without flooding its cont
 | Level | MCP tool | HTTP | Returns |
 |---|---|---|---|
 | 1 | `discover_services(q?, limit?)` | `GET /discover/services?q=&limit=` | Every service: name, one-line description, endpoint count |
-| 2 | `discover_service_endpoints(service, q?, method?, limit?)` | `GET /discover/services/{service}/endpoints?q=&method=&limit=` | Endpoints, one line each, with `stats` = `{successRate, avgCostUsd, avgDurationMs, runs, sampled, lastRunAt}` or `"no runs yet"` / `"not measured: ..."`; most-used first, 20 per page; `roi` status; run tasks no endpoint claims (`unlinkedTasks`) |
+| 2 | `discover_service_endpoints(service, q?, method?, limit?)` | `GET /discover/services/{service}/endpoints?q=&method=&limit=` | Endpoints, one line each, with `stats` = `{successRate, avgCostUsd, avgDurationMs, runs, sampled, lastRunAt}` or `"no runs yet"` / `"no run of its own: ..."` / `"no runs recorded: ..."`; `roi` = `{step, stepName, valueUsd, roi}` on endpoints producing a funnel step; most-used first, 20 per page; run tasks no endpoint claims (`unlinkedTasks`) |
 | 3 | `discover_endpoint(service, method, path)` | `GET /discover/services/{service}/endpoint?method=&path=` | Full doc ($refs resolved, error responses included), stats, and how to test-run it |
 
 Test-run = `call_api` (MCP) or `POST /call/{service}` (HTTP): a real run, billed to the calling org.
@@ -119,7 +119,7 @@ Test-run = `call_api` (MCP) or `POST /call/{service}` (HTTP): a real run, billed
 
 **Service descriptions** (level 1) live in `SERVICE_DESCRIPTIONS` (`src/catalog.ts`); a new service needs a line there (a test pins every service running on the box).
 
-**ROI**: not served until features-service serves a value per step; level 2/3 say so in `roi`.
+**ROI** = `valueUsd` of the step the endpoint produces (features-service `GET /internal/catalogue/steps`, cached 15 min) / `avgCostUsd`. Endpoint to step: the producer's `x-produces-step`, a declared step's `producedBy` (`"<service> METHOD /path"`), then `ENDPOINT_STEPS`. Endpoints producing no step show cost only; `$0` cost or a step without value gives `roi: null` + `note`.
 
 ## MCP Server
 

@@ -20,12 +20,14 @@ vi.stubEnv("RUNS_SERVICE_API_KEY", "runs-key");
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-const { default: app, discovery, taskOutcomes } = await import("./index.js");
+const { default: app, discovery, taskOutcomes, stepCatalog } = await import("./index.js");
+const { parseProducedBy } = await import("./steps.js");
 
 function resetCaches() {
   mockFetch.mockReset();
   discovery.clearSpecCache();
   taskOutcomes.clear();
+  stepCatalog.clear();
 }
 const catalog = await import("./catalog.js");
 const { TaskOutcomesCache } = await import("./run-stats.js");
@@ -81,9 +83,29 @@ const APOLLO_OUTCOMES = {
 };
 
 /** Route fetch calls by URL: specs by host, runs-service task-outcomes by query. */
-function routeFetch(handlers: { spec?: (host: string) => unknown; outcomes?: (service: string) => unknown | Error }) {
+const STEPS = [
+  { id: "lead_found", name: "Lead found", valueUsd: 2.59, producedBy: null },
+  { id: "email_revealed", name: "Email revealed", valueUsd: 0.17, producedBy: "apollo-service POST /enrich" },
+  { id: "paid_client", name: "Paid client", valueUsd: null, producedBy: null },
+];
+
+function routeFetch(handlers: {
+  spec?: (host: string) => unknown;
+  outcomes?: (service: string) => unknown | Error;
+  steps?: typeof STEPS | Error;
+}) {
   mockFetch.mockImplementation(async (url: string) => {
     const u = new URL(url);
+    if (u.pathname.startsWith("/internal/catalogue/steps")) {
+      const steps = handlers.steps ?? STEPS;
+      if (steps instanceof Error) return json({ error: steps.message }, 500);
+      if (u.pathname === "/internal/catalogue/steps") {
+        return json({ object: "step", total: steps.length, truncated: false, rows: steps.map(({ id, name, valueUsd }) => ({ id, name, valueUsd, icon: "x", line: "l" })) });
+      }
+      const id = decodeURIComponent(u.pathname.split("/").pop()!);
+      const st = steps.find((x) => x.id === id);
+      return st ? json({ object: "step", ...st, declared: !!st.producedBy }) : json({ error: "nf" }, 404);
+    }
     if (u.pathname === "/openapi.json") {
       const host = u.hostname.replace(".example.com", "");
       const spec = handlers.spec?.(host) ?? { openapi: "3.0.0", info: { title: host }, paths: { "/x": { get: { summary: "X" } } } };
@@ -181,6 +203,17 @@ describe("catalog helpers", () => {
     expect(unlinked.map((t) => t.task)).toEqual(["hold-reconcile-cron"]);
   });
 
+  it("joinStats: a prefix entry (email-send-step-*) merges every matching task", () => {
+    const ops = catalog.extractOperations({ paths: { "/orgs/send": { post: { summary: "Send" } } } });
+    const { endpoints, unlinked } = catalog.joinStats("instantly", ops, [
+      outcome("email-send-step-1", { totalRunCount: 100 }),
+      outcome("email-send-step-2", { totalRunCount: 50 }),
+      outcome("ai-instant-call", { totalRunCount: 4 }),
+    ]);
+    expect(endpoints[0].stats).toMatchObject({ runs: 150, tasks: ["email-send-step-1", "email-send-step-2"] });
+    expect(unlinked.map((t) => t.task)).toEqual(["ai-instant-call"]);
+  });
+
   it("joinStats: a producer's x-run-task wins over the curated table", () => {
     const ops = catalog.extractOperations({ paths: { "/enrich": { post: { summary: "E", "x-run-task": "people-search-next" } } } });
     const { endpoints } = catalog.joinStats("apollo", ops, APOLLO_OUTCOMES.tasks);
@@ -198,6 +231,37 @@ describe("catalog helpers", () => {
     ]);
     expect(endpoints.map((e) => typeof e.stats === "string" ? e.stats : e.stats.runs)).toEqual([5000, 4000, catalog.NO_RUNS_YET]);
     expect(unlinked.map((t) => t.task)).toEqual(["GET /v1/gone"]);
+  });
+});
+
+describe("ROI", () => {
+  const steps = new Map(STEPS.map((s) => [s.id, s]));
+  const stats = { successRate: 1, avgCostUsd: 0.021, avgDurationMs: 100, runs: 10, sampled: 10, lastRunAt: null };
+
+  it("roi = step value / avg cost per call", () => {
+    expect(catalog.roiFor("lead_found", steps, stats)).toEqual({ step: "lead_found", stepName: "Lead found", valueUsd: 2.59, roi: 123.33 });
+  });
+
+  it("never invents: no value, no cost, $0 cost, unknown step", () => {
+    expect(catalog.roiFor("paid_client", steps, stats).note).toBe("step has no value yet");
+    expect(catalog.roiFor("lead_found", steps, catalog.NO_RUNS_YET)).toMatchObject({ roi: null, note: "no cost measured (no runs yet)" });
+    expect(catalog.roiFor("lead_found", steps, { ...stats, avgCostUsd: 0 }).roi).toBeNull();
+    expect(catalog.roiFor("nope", steps, stats)).toMatchObject({ roi: null, note: "step not in the features-service catalogue" });
+  });
+
+  it("producedStep: x-produces-step, then declared producedBy, then the curated table", () => {
+    const op = (method: string, path: string, producesStep?: string) => ({ method, path, summary: "", ...(producesStep ? { producesStep } : {}) });
+    expect(catalog.producedStep("lead", op("POST", "/orgs/buffer/next"), steps)).toBe("lead_found");
+    expect(catalog.producedStep("apollo", op("POST", "/enrich"), steps)).toBe("email_revealed");
+    expect(catalog.producedStep("apollo", op("POST", "/enrich", "paid_client"), steps)).toBe("paid_client");
+    expect(catalog.producedStep("apollo", op("POST", "/match"), steps)).toBeUndefined();
+  });
+
+  it("parseProducedBy reads '<service> METHOD /path' only", () => {
+    expect(parseProducedBy("apollo-service POST /search/next")).toEqual({ service: "apollo", endpoint: "POST /search/next" });
+    expect(parseProducedBy("lead post /orgs/buffer/next")).toEqual({ service: "lead", endpoint: "POST /orgs/buffer/next" });
+    expect(parseProducedBy("the cold email workflow")).toBeNull();
+    expect(parseProducedBy(null)).toBeNull();
   });
 });
 
@@ -286,7 +350,14 @@ describe("GET /discover/services/:service/endpoints (level 2)", () => {
     const res = await request(app).get("/discover/services/apollo/endpoints").set(KEY_ONLY);
     expect(res.status).toBe(200);
     expect(res.body.endpointCount).toBe(5);
-    expect(res.body.roi).toBe(catalog.ROI_NOTE);
+    expect(res.body.roiBasis).toBe(catalog.ROI_BASIS);
+    const by = (p: string) => res.body.endpoints.find((e: { path: string }) => e.path === p);
+    // a page of teasers is not one found lead: no step, cost only
+    expect(by("/search/next").roi).toBeUndefined();
+    // declared on the step itself (producedBy "apollo-service POST /enrich"): 0.17 / 0.085
+    expect(by("/enrich").roi).toEqual({ step: "email_revealed", stepName: "Email revealed", valueUsd: 0.17, roi: 2 });
+    // produces nothing: cost only
+    expect(by("/match").roi).toBeUndefined();
     expect(res.body.statsBasis).toContain("all orgs");
     expect(res.body.endpoints.map((e: { path: string }) => e.path)).toEqual([
       "/search/next", "/enrich", "/email-finder/find", "/match", "/reference/industries",
@@ -296,6 +367,7 @@ describe("GET /discover/services/:service/endpoints (level 2)", () => {
       path: "/enrich",
       summary: "Enrich a person via Apollo to reveal their email",
       stats: { successRate: 0.95, avgCostUsd: 0.085, avgDurationMs: 50, runs: 17000, sampled: 200, lastRunAt: "2026-10-10T08:00:00.000Z" },
+      roi: { step: "email_revealed", stepName: "Email revealed", valueUsd: 0.17, roi: 2 },
     });
     expect(res.body.unlinkedTasks).toEqual([
       { task: "hold-reconcile-cron", runs: 5, successRate: 1, avgCostUsd: 0, avgDurationMs: 100 },
@@ -331,6 +403,27 @@ describe("GET /discover/services/:service/endpoints (level 2)", () => {
     expect(res.status).toBe(200);
     expect(res.body.statsError).toBe("run stats unavailable: runs-service HTTP 404");
     expect(res.body.endpoints[0].stats).toBe("unavailable");
+  });
+
+  it("features-service down: stats still served, roiError says why, no endpoint roi", async () => {
+    routeFetch({ spec: (h) => (h === "apollo" ? APOLLO_SPEC : undefined), outcomes: () => APOLLO_OUTCOMES, steps: new Error("boom") });
+    const res = await request(app).get("/discover/services/apollo/endpoints").set(KEY_ONLY);
+    expect(res.body.roiError).toBe("step values unavailable: features-service /internal/catalogue/steps HTTP 500");
+    expect(res.body.endpoints[0].stats.runs).toBe(30000);
+    expect(res.body.endpoints.every((e: { roi?: unknown }) => e.roi === undefined)).toBe(true);
+  });
+
+  it("a service that tracks no runs says so on every endpoint", async () => {
+    routeFetch({ spec: (h) => (h === "key" ? APOLLO_SPEC : undefined) });
+    const res = await request(app).get("/discover/services/key/endpoints").set(KEY_ONLY);
+    for (const e of res.body.endpoints) expect(e.stats).toBe(catalog.SERVICE_TRACKS_NO_RUNS);
+  });
+
+  it("google: one shared run task per request is not split per endpoint", async () => {
+    routeFetch({ spec: (h) => (h === "google" ? APOLLO_SPEC : undefined), outcomes: () => ({ serviceName: "google", sample: 200, tasks: [outcome("request")] }) });
+    const res = await request(app).get("/discover/services/google/endpoints").set(KEY_ONLY);
+    expect(res.body.endpoints[0].stats).toContain('shares the run task "request"');
+    expect(res.body.unlinkedTasks[0].task).toBe("request");
   });
 
   it("404 for an unknown service", async () => {
@@ -372,6 +465,8 @@ describe("GET /discover/services/:service/endpoint (level 3)", () => {
     expect(res.body.requestBody.schema.properties.personId).toEqual({ type: "string" });
     expect(Object.keys(res.body.responses)).toEqual(["200", "402"]);
     expect(res.body.stats).toMatchObject({ runs: 17000, avgCostUsd: 0.085 });
+    expect(res.body.roi).toMatchObject({ step: "email_revealed", roi: 2 });
+    expect(res.body.roiBasis).toBe(catalog.ROI_BASIS);
     expect(res.body.testRun.http).toContain("POST /call/{service}");
     expect(res.body.testRun.billing).toContain("billed to the calling org");
   });

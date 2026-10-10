@@ -481,9 +481,13 @@
             "type": "string",
             "description": "Present when runs-service stats could not be read; endpoints then carry stats 'unavailable'"
           },
-          "roi": {
+          "roiBasis": {
             "type": "string",
-            "description": "ROI status: not served until features-service serves a value per step"
+            "description": "How roi is computed"
+          },
+          "roiError": {
+            "type": "string",
+            "description": "Present when features-service step values could not be read"
           },
           "endpoints": {
             "type": "array",
@@ -509,7 +513,10 @@
                       "type": "string"
                     }
                   ],
-                  "description": "Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'"
+                  "description": "Run stats, or a sentence saying why there are none: 'no runs yet', 'no run of its own: this endpoint opens no run, so no metered cost of its own', or 'no runs recorded: this service tracks no runs, so no metered cost'"
+                },
+                "roi": {
+                  "$ref": "#/components/schemas/EndpointRoi"
                 }
               },
               "required": [
@@ -567,7 +574,7 @@
           "matched",
           "shown",
           "statsBasis",
-          "roi",
+          "roiBasis",
           "endpoints",
           "_next"
         ]
@@ -617,6 +624,38 @@
           "sampled",
           "lastRunAt"
         ]
+      },
+      "EndpointRoi": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "features-service step id the endpoint produces (e.g. lead_found)"
+          },
+          "stepName": {
+            "type": "string"
+          },
+          "valueUsd": {
+            "type": "number",
+            "nullable": true,
+            "description": "Value of one such step"
+          },
+          "roi": {
+            "type": "number",
+            "nullable": true,
+            "description": "valueUsd / avgCostUsd; null with a note when it cannot be computed"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "stepName",
+          "valueUsd",
+          "roi"
+        ],
+        "description": "Only on endpoints that produce a funnel step"
       },
       "DiscoverEndpointResponse": {
         "type": "object",
@@ -669,12 +708,26 @@
                 "type": "string"
               }
             ],
-            "description": "Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'"
+            "description": "Run stats, or a sentence saying why there are none: 'no runs yet', 'no run of its own: this endpoint opens no run, so no metered cost of its own', or 'no runs recorded: this service tracks no runs, so no metered cost'"
           },
           "statsBasis": {
             "type": "string"
           },
           "roi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EndpointRoi"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "ROI object, or 'produces no funnel step: cost only'"
+          },
+          "roiBasis": {
+            "type": "string"
+          },
+          "roiError": {
             "type": "string"
           },
           "testRun": {
