@@ -438,7 +438,17 @@ const RunStatsSchema = z
 
 const EndpointStatsField = z
   .union([RunStatsSchema, z.string()])
-  .describe("Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'");
+  .describe("Run stats, or a sentence saying why there are none: 'no runs yet', 'no run of its own: this endpoint opens no run, so no metered cost of its own', or 'no runs recorded: this service tracks no runs, so no metered cost'");
+
+const EndpointRoiSchema = z
+  .object({
+    step: z.string().describe("features-service step id the endpoint produces (e.g. lead_found)"),
+    stepName: z.string(),
+    valueUsd: z.number().nullable().describe("Value of one such step"),
+    roi: z.number().nullable().describe("valueUsd / avgCostUsd; null with a note when it cannot be computed"),
+    note: z.string().optional(),
+  })
+  .openapi("EndpointRoi");
 
 const DiscoverServicesResponseSchema = z
   .object({
@@ -484,9 +494,16 @@ const DiscoverEndpointsResponseSchema = z
     statsBasis: z.string().describe("How the stats are computed"),
     statsAsOf: z.string().optional(),
     statsError: z.string().optional().describe("Present when runs-service stats could not be read; endpoints then carry stats 'unavailable'"),
-    roi: z.string().describe("ROI status: not served until features-service serves a value per step"),
+    roiBasis: z.string().describe("How roi is computed"),
+    roiError: z.string().optional().describe("Present when features-service step values could not be read"),
     endpoints: z.array(
-      z.object({ method: z.string(), path: z.string(), summary: z.string().describe("One line"), stats: EndpointStatsField }),
+      z.object({
+        method: z.string(),
+        path: z.string(),
+        summary: z.string().describe("One line"),
+        stats: EndpointStatsField,
+        roi: EndpointRoiSchema.optional().describe("Only on endpoints that produce a funnel step"),
+      }),
     ),
     unlinkedTasks: z
       .array(
@@ -538,7 +555,9 @@ const DiscoverEndpointResponseSchema = z
     responses: z.object({}).passthrough().optional(),
     stats: EndpointStatsField,
     statsBasis: z.string().optional(),
-    roi: z.string(),
+    roi: z.union([EndpointRoiSchema, z.string()]).describe("ROI object, or 'produces no funnel step: cost only'"),
+    roiBasis: z.string().optional(),
+    roiError: z.string().optional(),
     testRun: z.object({ mcp: z.string(), http: z.string(), billing: z.string() }),
   })
   .openapi("DiscoverEndpointResponse");

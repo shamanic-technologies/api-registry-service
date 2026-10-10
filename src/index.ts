@@ -8,6 +8,7 @@ import { requireApiKey, requireIdentity, cleanHeader } from "./auth.js";
 import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 import { Discovery } from "./discovery.js";
 import { TaskOutcomesCache, STATS_TTL_MS } from "./run-stats.js";
+import { StepCatalogCache } from "./steps.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -468,7 +469,9 @@ app.post("/call/:service", async (req, res) => {
 // Agent discovery, three levels (services -> endpoints with run stats -> one endpoint).
 // Run stats come from runs-service GET /internal/stats/task-outcomes (fleet-wide).
 export const taskOutcomes = new TaskOutcomesCache({ getRunsEntry: () => SERVICES["runs"] });
-export const discovery = new Discovery({ getServices: () => SERVICES, fetchSpec }, taskOutcomes);
+// Step values (ROI) come from features-service GET /internal/catalogue/steps.
+export const stepCatalog = new StepCatalogCache({ getFeaturesEntry: () => SERVICES["features"] });
+export const discovery = new Discovery({ getServices: () => SERVICES, fetchSpec }, taskOutcomes, stepCatalog);
 
 function queryString(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
