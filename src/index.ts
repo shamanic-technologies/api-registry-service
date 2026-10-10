@@ -6,6 +6,8 @@ import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 import { requireApiKey, requireIdentity, cleanHeader } from "./auth.js";
 import { EndpointSearchIndex, derivePathGroup } from "./search.js";
+import { Discovery } from "./discovery.js";
+import { TaskOutcomesCache, STATS_TTL_MS } from "./run-stats.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,6 +27,7 @@ app.use((req, res, next) => {
     // Read-only spec/discovery endpoints: identity adds no value for service-to-service calls
     if (req.method === "GET" && ["/services", "/llm-context", "/search"].includes(req.path)) return next();
     if (req.method === "GET" && (req.path.startsWith("/openapi/") || req.path.startsWith("/llm-context/"))) return next();
+    if (req.method === "GET" && req.path.startsWith("/discover/")) return next();
     requireIdentity(req, res, next);
   });
 });
@@ -462,12 +465,57 @@ app.post("/call/:service", async (req, res) => {
   }
 });
 
+// Agent discovery, three levels (services -> endpoints with run stats -> one endpoint).
+// Run stats come from runs-service GET /internal/stats/task-outcomes (fleet-wide).
+export const taskOutcomes = new TaskOutcomesCache({ getRunsEntry: () => SERVICES["runs"] });
+export const discovery = new Discovery({ getServices: () => SERVICES, fetchSpec }, taskOutcomes);
+
+function queryString(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+function queryLimit(v: unknown): number | undefined {
+  const n = typeof v === "string" ? parseInt(v, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+// Level 1: every service, one line each
+app.get("/discover/services", async (req, res) => {
+  res.json(await discovery.services({ q: queryString(req.query.q), limit: queryLimit(req.query.limit) }));
+});
+
+// Level 2: one service's endpoints with avg cost, duration, success rate
+app.get("/discover/services/:service/endpoints", async (req, res) => {
+  const out = await discovery.endpoints(req.params.service, {
+    q: queryString(req.query.q),
+    method: queryString(req.query.method),
+    limit: queryLimit(req.query.limit),
+  });
+  res.status(out.status).json(out.body);
+});
+
+// Level 3: one endpoint's full doc, its run stats, and how to test-run it (POST /call/:service)
+app.get("/discover/services/:service/endpoint", async (req, res) => {
+  const method = queryString(req.query.method);
+  const path = queryString(req.query.path);
+  if (!method || !path) {
+    return res.status(400).json({ error: "Missing required query parameters: method, path" });
+  }
+  const out = await discovery.endpoint(req.params.service, method, path);
+  res.status(out.status).json(out.body);
+});
+
 // Register MCP endpoint for LLM access
 export const mcpSessions = registerMcpEndpoint(app, {
   getServices: () => SERVICES,
   fetchSpec,
-});
+}, discovery);
 if (process.env.NODE_ENV !== "test") {
+  // Keep run stats warm so level 2 never waits on a cold runs-service query.
+  const warm = () =>
+    discovery.warmStats().catch((err) => console.error("[api-registry] run stats warm-up failed:", err));
+  setTimeout(warm, 30_000).unref();
+  setInterval(warm, STATS_TTL_MS).unref();
+
   app.listen(Number(PORT), "::", () => {
     console.log(`API Registry running on port ${PORT}`);
     console.log(

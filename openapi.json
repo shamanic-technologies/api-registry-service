@@ -400,6 +400,311 @@
           "method",
           "path"
         ]
+      },
+      "DiscoverServicesResponse": {
+        "type": "object",
+        "properties": {
+          "serviceCount": {
+            "type": "number"
+          },
+          "matched": {
+            "type": "number"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "One line"
+                },
+                "endpoints": {
+                  "type": "number",
+                  "nullable": true,
+                  "description": "Endpoint count (health/openapi excluded); null when the spec is unreachable"
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "endpoints"
+              ]
+            }
+          },
+          "_next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceCount",
+          "matched",
+          "services",
+          "_next"
+        ]
+      },
+      "DiscoverEndpointsResponse": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "endpointCount": {
+            "type": "number"
+          },
+          "matched": {
+            "type": "number"
+          },
+          "shown": {
+            "type": "number"
+          },
+          "_more": {
+            "type": "string"
+          },
+          "statsBasis": {
+            "type": "string",
+            "description": "How the stats are computed"
+          },
+          "statsAsOf": {
+            "type": "string"
+          },
+          "statsError": {
+            "type": "string",
+            "description": "Present when runs-service stats could not be read; endpoints then carry stats 'unavailable'"
+          },
+          "roi": {
+            "type": "string",
+            "description": "ROI status: not served until features-service serves a value per step"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "One line"
+                },
+                "stats": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RunStats"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "description": "Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'"
+                }
+              },
+              "required": [
+                "method",
+                "path",
+                "summary",
+                "stats"
+              ]
+            }
+          },
+          "unlinkedTasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task": {
+                  "type": "string"
+                },
+                "runs": {
+                  "type": "number"
+                },
+                "successRate": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "avgCostUsd": {
+                  "type": "number"
+                },
+                "avgDurationMs": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "task",
+                "runs",
+                "successRate",
+                "avgCostUsd",
+                "avgDurationMs"
+              ]
+            },
+            "description": "Run tasks of this service that no endpoint claims (crons, internal jobs), top 5 by runs"
+          },
+          "unlinkedTaskCount": {
+            "type": "number"
+          },
+          "_next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "description",
+          "endpointCount",
+          "matched",
+          "shown",
+          "statsBasis",
+          "roi",
+          "endpoints",
+          "_next"
+        ]
+      },
+      "RunStats": {
+        "type": "object",
+        "properties": {
+          "successRate": {
+            "type": "number",
+            "nullable": true,
+            "description": "completed / (completed + failed) over the sampled runs; null when none ended"
+          },
+          "avgCostUsd": {
+            "type": "number",
+            "description": "Mean whole-run cost in USD: the run's own and every sub-call's actual costs, at catalogue price"
+          },
+          "avgDurationMs": {
+            "type": "number",
+            "nullable": true,
+            "description": "Mean duration of the sampled COMPLETED runs; null when none completed"
+          },
+          "runs": {
+            "type": "number",
+            "description": "All-time run count of the task(s) behind this endpoint, all orgs"
+          },
+          "sampled": {
+            "type": "number",
+            "description": "Runs measured: the most recent ones, at most 200 per task"
+          },
+          "lastRunAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Run task names merged into this endpoint, when more than one"
+          }
+        },
+        "required": [
+          "successRate",
+          "avgCostUsd",
+          "avgDurationMs",
+          "runs",
+          "sampled",
+          "lastRunAt"
+        ]
+      },
+      "DiscoverEndpointResponse": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "requestBody": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "responses": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunStats"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Run stats, or a sentence saying why there are none: 'no runs yet', or 'not measured: no run task linked to this endpoint yet'"
+          },
+          "statsBasis": {
+            "type": "string"
+          },
+          "roi": {
+            "type": "string"
+          },
+          "testRun": {
+            "type": "object",
+            "properties": {
+              "mcp": {
+                "type": "string"
+              },
+              "http": {
+                "type": "string"
+              },
+              "billing": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "mcp",
+              "http",
+              "billing"
+            ]
+          }
+        },
+        "required": [
+          "service",
+          "method",
+          "path",
+          "stats",
+          "roi",
+          "testRun"
+        ]
       }
     },
     "parameters": {}
@@ -984,6 +1289,216 @@
           },
           "404": {
             "description": "Spec not generated yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/discover/services": {
+      "get": {
+        "summary": "Level 1: every running service with a one-line description",
+        "description": "Start here to explore the platform. Each service: name, one-line description, endpoint count. Next: GET /discover/services/{service}/endpoints.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Text filter on name + description; every word must match"
+            },
+            "required": false,
+            "description": "Text filter on name + description; every word must match",
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Max services returned (default all)"
+            },
+            "required": false,
+            "description": "Max services returned (default all)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverServicesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/discover/services/{service}/endpoints": {
+      "get": {
+        "summary": "Level 2: a service's endpoints with avg cost, duration and success rate",
+        "description": "One line per endpoint plus stats measured on real runs across all orgs. Most-used first; 20 per page by default. Next: GET /discover/services/{service}/endpoint?method=&path=.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "service",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Text filter on method + path + summary; every word must match"
+            },
+            "required": false,
+            "description": "Text filter on method + path + summary; every word must match",
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "method",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Default 20, max 200"
+            },
+            "required": false,
+            "description": "Default 20, max 200",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Endpoints with stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverEndpointsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Service spec unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/discover/services/{service}/endpoint": {
+      "get": {
+        "summary": "Level 3: one endpoint's full doc, run stats, and how to test-run it",
+        "description": "Full parameters, request and response schemas ($refs resolved, error responses included), the endpoint's run stats, and how to run it now via POST /call/{service} (a real run, billed to the calling org).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "service",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "method",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "path",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Endpoint doc + stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverEndpointResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing method or path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service, path or method not found",
             "content": {
               "application/json": {
                 "schema": {
