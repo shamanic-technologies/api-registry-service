@@ -4,6 +4,7 @@ import { Express, Request, Response } from "express";
 import { z } from "zod";
 import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
 import { cleanHeader } from "./auth.js";
+import type { Discovery } from "./discovery.js";
 
 interface ServiceRegistry {
   getServices(): Record<string, { baseUrl: string; apiKey?: string }>;
@@ -352,7 +353,11 @@ export class McpSessionStore<T> {
   }
 }
 
-export function registerMcpEndpoint(app: Express, registry: ServiceRegistry): McpSessionStore<StreamableHTTPServerTransport> {
+export function registerMcpEndpoint(
+  app: Express,
+  registry: ServiceRegistry,
+  discovery?: Discovery,
+): McpSessionStore<StreamableHTTPServerTransport> {
   const sessions = new McpSessionStore<StreamableHTTPServerTransport>({
     idleTtlMs: MCP_SESSION_IDLE_TTL_MS,
     maxSessions: MCP_MAX_SESSIONS,
@@ -364,6 +369,46 @@ export function registerMcpEndpoint(app: Express, registry: ServiceRegistry): Mc
       name: "API Registry",
       version: "1.0.0",
     });
+
+    if (discovery) {
+      const asText = (body: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }] });
+
+      // Level 1: every service, one line each
+      server.tool(
+        "discover_services",
+        "START HERE to build or explore a workflow. Level 1 of 3: every running service with a one-line description and its endpoint count. Then discover_service_endpoints(service) for its endpoints with cost, duration and success rate.",
+        {
+          q: z.string().optional().describe("Text filter on service name and description (all words must match), e.g. 'email'"),
+          limit: z.number().optional().describe("Max services returned (default: all)"),
+        },
+        async ({ q, limit }) => asText(await discovery.services({ q, limit })),
+      );
+
+      // Level 2: one service's endpoints with run stats
+      server.tool(
+        "discover_service_endpoints",
+        "Level 2 of 3: a service's endpoints, one line each, with measured stats per endpoint from real runs across all orgs: successRate, avgCostUsd (whole run incl. sub-calls), avgDurationMs, runs. 'no runs yet' when never run. Most-used first, 20 per page. Then discover_endpoint for the full doc.",
+        {
+          service: z.string().describe("Service name from discover_services (e.g. 'apollo')"),
+          q: z.string().optional().describe("Text filter on method, path and summary (all words must match), e.g. 'enrich'"),
+          method: z.string().optional().describe("Filter by HTTP method (e.g. 'POST')"),
+          limit: z.number().optional().describe("Max endpoints returned (default 20, max 200)"),
+        },
+        async ({ service, q, method, limit }) => asText((await discovery.endpoints(service, { q, method, limit })).body),
+      );
+
+      // Level 3: one endpoint in full + how to test-run it
+      server.tool(
+        "discover_endpoint",
+        "Level 3 of 3: one endpoint's full doc (parameters, request and response schemas, refs resolved), its run stats, and how to test-run it with call_api (a test run is a real run billed to your org).",
+        {
+          service: z.string().describe("Service name (e.g. 'apollo')"),
+          method: z.string().describe("HTTP method (e.g. 'POST')"),
+          path: z.string().describe("Endpoint path exactly as listed by discover_service_endpoints (e.g. '/enrich')"),
+        },
+        async ({ service, method, path }) => asText((await discovery.endpoint(service, method, path)).body),
+      );
+    }
 
     // Tool: list all registered services
     server.tool(
