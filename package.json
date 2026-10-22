@@ -23,7 +23,7 @@
   "homepage": "https://github.com/shamanic-technologies/api-registry-service#readme",
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^8.4.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "minisearch": "^7.2.0",
@@ -37,6 +37,6 @@
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.12"
   }
 }

@@ -1,4 +1,4 @@
-FROM node:20-slim AS build
+FROM node:22.23.4-slim AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 RUN npm run build
 
-FROM node:20-slim
+FROM node:22.23.4-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
