@@ -2,6 +2,7 @@ import {
   ROI_BASIS,
   extractOperations,
   joinStats,
+  lookupService,
   matchesQuery,
   runsServiceName,
   serviceDescription,
@@ -98,9 +99,10 @@ export class Discovery {
   }
 
   // ---- Level 2 ----
-  async endpoints(service: string, opts: { q?: string; method?: string; limit?: number } = {}) {
-    const entry = this.registry.getServices()[service];
-    if (!entry) return { status: 404 as const, body: { error: `Service "${service}" not found`, available: Object.keys(this.registry.getServices()).sort() } };
+  async endpoints(requested: string, opts: { q?: string; method?: string; limit?: number } = {}) {
+    const found = lookupService(this.registry.getServices(), requested);
+    if (!found) return { status: 404 as const, body: { error: `Service "${requested}" not found`, available: Object.keys(this.registry.getServices()).sort() } };
+    const { name: service, entry } = found;
     const r = await this.spec(entry.baseUrl);
     if (r.error || !r.spec) return { status: 502 as const, body: { error: `Failed to fetch spec for "${service}"`, detail: r.error } };
 
@@ -137,7 +139,8 @@ export class Discovery {
   }
 
   // ---- Level 3 ----
-  async endpoint(service: string, method: string, path: string) {
+  async endpoint(requested: string, method: string, path: string) {
+    const service = lookupService(this.registry.getServices(), requested)?.name ?? requested;
     const details = await getEndpointDetails(this.cachedRegistry(), service, method, path, { includeErrors: true });
     if ("error" in details) {
       // availablePaths can list hundreds of paths: point at level 2 instead.
