@@ -53,6 +53,17 @@ export function runsServiceName(registryName: string): string {
 }
 
 /**
+ * Registry lookup by any name a caller reads in our docs: the registry key ("crm")
+ * or the container/repo spelling ("crm-service", what gateway docs print as owner).
+ */
+export function lookupService<T>(services: Record<string, T>, requested: string): { name: string; entry: T } | undefined {
+  for (const name of [requested, requested.trim().toLowerCase().replace(/-service$/, "")]) {
+    if (Object.hasOwn(services, name)) return { name, entry: services[name] };
+  }
+  return undefined;
+}
+
+/**
  * Endpoint -> run task names, for services whose run `task_name` is free-form.
  * Read from each producer's code (git grep taskName) on 2026-10-10. A producer can
  * declare the same thing itself with an `x-run-task` operation extension in its

@@ -168,6 +168,38 @@ describe("read-only endpoints without identity headers", () => {
     expect(res.body.available).toBeInstanceOf(Array);
   });
 
+  it("GET /openapi/:service answers the '<x>-service' spelling with the same document as '<x>'", async () => {
+    const doc = { openapi: "3.0.0", info: { title: "Campaign Service" } };
+    mockFetch.mockResolvedValue({ status: 200, ok: true, json: async () => doc });
+
+    const short = await request(app).get("/openapi/campaign").set(API_KEY_ONLY);
+    const long = await request(app).get("/openapi/campaign-service").set(API_KEY_ONLY);
+    expect(short.status).toBe(200);
+    expect(long.status).toBe(200);
+    expect(long.body).toEqual(short.body);
+    expect(mockFetch).toHaveBeenLastCalledWith("https://campaign.example.com/openapi.json", expect.anything());
+  });
+
+  it("GET /openapi/:service still 404s an unknown name with the available list", async () => {
+    for (const name of ["nonexistent-service", "constructor"]) {
+      const res = await request(app).get(`/openapi/${name}`).set(API_KEY_ONLY);
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe(`Service "${name}" not found`);
+      expect(res.body.available).toContain("campaign");
+    }
+  });
+
+  it("GET /llm-context/:service answers '<x>-service' under the registry name", async () => {
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: async () => ({ openapi: "3.0.0", paths: { "/health": { get: { summary: "Health" } } } }),
+    });
+    const res = await request(app).get("/llm-context/campaign-service").set(API_KEY_ONLY);
+    expect(res.status).toBe(200);
+    expect(res.body.service).toBe("campaign");
+  });
+
   it("POST /call/:service still requires identity headers", async () => {
     const res = await request(app)
       .post("/call/campaign")
