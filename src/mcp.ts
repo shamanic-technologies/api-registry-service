@@ -4,6 +4,7 @@ import { Express, Request, Response } from "express";
 import { z } from "zod";
 import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
 import { cleanHeader } from "./auth.js";
+import { lookupService } from "./catalog.js";
 import type { Discovery } from "./discovery.js";
 
 interface ServiceRegistry {
@@ -51,13 +52,14 @@ export async function getEndpointDetails(
   options?: { includeErrors?: boolean }
 ): Promise<Record<string, unknown>> {
   const services = registry.getServices();
-  const entry = services[service];
-  if (!entry) {
+  const found = lookupService(services, service);
+  if (!found) {
     return {
       error: `Service "${service}" not found`,
       available: Object.keys(services),
     };
   }
+  const { entry } = found;
 
   const result = await registry.fetchSpec(entry.baseUrl);
   if (result.error || !result.spec) {
@@ -439,8 +441,8 @@ export function registerMcpEndpoint(
       },
       async ({ service, method, pathPrefix, group }) => {
         const services = registry.getServices();
-        const entry = services[service];
-        if (!entry) {
+        const found = lookupService(services, service);
+        if (!found) {
           return {
             content: [{
               type: "text",
@@ -451,6 +453,7 @@ export function registerMcpEndpoint(
             }],
           };
         }
+        const { entry } = found;
 
         const result = await registry.fetchSpec(entry.baseUrl);
         if (result.error || !result.spec) {
@@ -641,8 +644,8 @@ export function registerMcpEndpoint(
       },
       async ({ service, method, path, body, headers: extraHeaders }) => {
         const services = registry.getServices();
-        const entry = services[service];
-        if (!entry) {
+        const found = lookupService(services, service);
+        if (!found) {
           return {
             content: [{
               type: "text",
@@ -653,6 +656,7 @@ export function registerMcpEndpoint(
             }],
           };
         }
+        const { entry } = found;
 
         try {
           const url = `${entry.baseUrl}${path}`;

@@ -9,6 +9,7 @@ import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 import { Discovery } from "./discovery.js";
 import { TaskOutcomesCache, STATS_TTL_MS } from "./run-stats.js";
 import { StepCatalogCache } from "./steps.js";
+import { lookupService } from "./catalog.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -130,15 +131,15 @@ app.get("/services", (_req, res) => {
 
 // Get OpenAPI spec for a specific service
 app.get("/openapi/:service", async (req, res) => {
-  const { service } = req.params;
-  const entry = SERVICES[service];
+  const found = lookupService(SERVICES, req.params.service);
 
-  if (!entry) {
+  if (!found) {
     return res.status(404).json({
-      error: `Service "${service}" not found`,
+      error: `Service "${req.params.service}" not found`,
       available: Object.keys(SERVICES),
     });
   }
+  const { name: service, entry } = found;
 
   const result = await fetchSpec(entry.baseUrl);
   if (result.error) {
@@ -293,15 +294,15 @@ app.get("/llm-context", async (_req, res) => {
 // LLM-friendly endpoint list for a specific service
 // Supports query filters: ?method=POST&group=campaigns&pathPrefix=/v1/campaigns
 app.get("/llm-context/:service", async (req, res) => {
-  const { service } = req.params;
-  const entry = SERVICES[service];
+  const found = lookupService(SERVICES, req.params.service);
 
-  if (!entry) {
+  if (!found) {
     return res.status(404).json({
-      error: `Service "${service}" not found`,
+      error: `Service "${req.params.service}" not found`,
       available: Object.keys(SERVICES),
     });
   }
+  const { name: service, entry } = found;
 
   const result = await fetchSpec(entry.baseUrl);
   if (result.error || !result.spec) {
@@ -391,15 +392,15 @@ app.get("/llm-context/:service", async (req, res) => {
 
 // Proxy endpoint: call any registered service with automatic API key injection
 app.post("/call/:service", async (req, res) => {
-  const { service } = req.params;
-  const entry = SERVICES[service];
+  const found = lookupService(SERVICES, req.params.service);
 
-  if (!entry) {
+  if (!found) {
     return res.status(404).json({
-      error: `Service "${service}" not found`,
+      error: `Service "${req.params.service}" not found`,
       available: Object.keys(SERVICES),
     });
   }
+  const { name: service, entry } = found;
 
   const { method, path, body, headers: extraHeaders } = req.body;
 
