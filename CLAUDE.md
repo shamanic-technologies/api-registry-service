@@ -14,7 +14,7 @@ Aggregates OpenAPI specs from multiple microservices into a single queryable reg
 - `src/schemas.ts` — Zod schemas + OpenAPI registry (source of truth for validation + spec generation)
 - `src/mcp.ts` — MCP (Model Context Protocol) endpoint for LLM tool access
 - `src/catalog.ts` — agent discovery logic (pure): service one-liners, endpoint -> run task linking, stats merge
-- `src/run-stats.ts` — runs-service `/internal/stats/task-outcomes` client, stale-while-revalidate cache
+- `src/run-stats.ts` — runs-service `/internal/stats/task-outcomes` client, stale-while-revalidate cache: one fetch per service per 60 min from its last attempt, one in flight per service, one sweep at a time (BOX-LOAD-1107: each fetch is a multi-second runs_service query)
 - `src/discovery.ts` — the 3 discovery levels shared by `GET /discover/*` and the `discover_*` MCP tools
 
 ## Rules

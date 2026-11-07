@@ -287,6 +287,63 @@ describe("TaskOutcomesCache", () => {
     expect(still.ok && still.outcomes.length).toBe(5);
   });
 
+  it("fetches a service at most once per TTL from the last attempt, success or failure (BOX-LOAD-1107)", async () => {
+    let now = 0;
+    const cache = new TaskOutcomesCache({ getRunsEntry: () => ({ baseUrl: "https://runs.example.com" }), ttlMs: 1000, now: () => now });
+    mockFetch.mockResolvedValue(json(APOLLO_OUTCOMES));
+    await cache.get("apollo-service");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Within the TTL: neither a read nor the sweep fetches.
+    now = 999;
+    await cache.get("apollo-service");
+    await cache.refreshIfDue("apollo-service");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Due: the stale read revalidates once; the sweep right after skips it (attempt clock restarted).
+    now = 1000;
+    mockFetch.mockResolvedValueOnce(json({ error: "x" }, 500));
+    const stale = await cache.get("apollo-service");
+    expect(stale.ok && stale.outcomes.length).toBe(5);
+    await cache.refreshIfDue("apollo-service");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // That refresh FAILED: the stale value stays, and no retry until the TTL elapses again.
+    now = 1500;
+    await cache.get("apollo-service");
+    await cache.refreshIfDue("apollo-service");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    now = 2000;
+    await cache.refreshIfDue("apollo-service");
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("one fetch per service at a time: concurrent asks share the in-flight request", async () => {
+    let release!: (v: unknown) => void;
+    const cache = new TaskOutcomesCache({ getRunsEntry: () => ({ baseUrl: "https://runs.example.com" }) });
+    mockFetch.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const a = cache.get("apollo-service");
+    const b = cache.get("apollo-service");
+    const c = cache.refreshIfDue("apollo-service");
+    expect(cache.isDue("apollo-service")).toBe(false);
+    release(json(APOLLO_OUTCOMES));
+    await Promise.all([a, b, c]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never two sweeps at once; a sweep inside the TTL fetches nothing", async () => {
+    routeFetch({ outcomes: () => ({ serviceName: "x", sample: 200, tasks: [] }) });
+    const outcomeCalls = () => mockFetch.mock.calls.filter((c) => String(c[0]).includes("/internal/stats/task-outcomes")).length;
+    const s1 = discovery.warmStats();
+    const s2 = discovery.warmStats();
+    expect(s2).toBe(s1);
+    await s1;
+    expect(outcomeCalls()).toBe(BOX_SERVICES.length);
+    await discovery.warmStats();
+    expect(outcomeCalls()).toBe(BOX_SERVICES.length);
+  });
+
   it("a cold miss that fails says why, loudly", async () => {
     const cache = new TaskOutcomesCache({ getRunsEntry: () => ({ baseUrl: "https://runs.example.com" }) });
     mockFetch.mockResolvedValueOnce(json({ error: "Not found" }, 404));
