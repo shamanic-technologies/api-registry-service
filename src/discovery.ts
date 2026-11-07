@@ -69,11 +69,22 @@ export class Discovery {
     return { getServices: () => this.registry.getServices(), fetchSpec: (u) => this.spec(u) };
   }
 
-  /** Warm every service's run stats, one service at a time (background job). */
-  async warmStats(): Promise<void> {
-    for (const name of Object.keys(this.registry.getServices())) {
-      await this.outcomes.refresh(runsServiceName(name));
-    }
+  private sweep: Promise<void> | null = null;
+
+  /**
+   * Refresh the run stats that are due, one service at a time (background job).
+   * Never two sweeps at once: a tick landing while one runs joins it.
+   */
+  warmStats(): Promise<void> {
+    if (this.sweep) return this.sweep;
+    this.sweep = (async () => {
+      for (const name of Object.keys(this.registry.getServices())) {
+        await this.outcomes.refreshIfDue(runsServiceName(name));
+      }
+    })().finally(() => {
+      this.sweep = null;
+    });
+    return this.sweep;
   }
 
   // ---- Level 1 ----

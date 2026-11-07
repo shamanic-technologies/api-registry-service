@@ -7,7 +7,7 @@ import cors from "cors";
 import { requireApiKey, requireIdentity, cleanHeader } from "./auth.js";
 import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 import { Discovery } from "./discovery.js";
-import { TaskOutcomesCache, STATS_TTL_MS } from "./run-stats.js";
+import { TaskOutcomesCache, STATS_SWEEP_CHECK_MS } from "./run-stats.js";
 import { StepCatalogCache } from "./steps.js";
 import { lookupService } from "./catalog.js";
 
@@ -514,11 +514,12 @@ export const mcpSessions = registerMcpEndpoint(app, {
   fetchSpec,
 }, discovery);
 if (process.env.NODE_ENV !== "test") {
-  // Keep run stats warm so level 2 never waits on a cold runs-service query.
+  // Keep run stats warm so level 2 never waits on a cold runs-service query. The sweep
+  // wakes every 5 min but fetches only services not attempted within the 60-min TTL.
   const warm = () =>
     discovery.warmStats().catch((err) => console.error("[api-registry] run stats warm-up failed:", err));
   setTimeout(warm, 30_000).unref();
-  setInterval(warm, STATS_TTL_MS).unref();
+  setInterval(warm, STATS_SWEEP_CHECK_MS).unref();
 
   app.listen(Number(PORT), "::", () => {
     console.log(`API Registry running on port ${PORT}`);

@@ -6,6 +6,12 @@ import type { TaskOutcome } from "./catalog.js";
 // The query takes seconds to tens of seconds on the busiest services, so results
 // are cached and refreshed in the background: a stale answer is served while the
 // refresh runs, and only a cold miss waits.
+//
+// Refresh cadence (BOX-LOAD-1107): each figure is a mean over a task's newest 200
+// runs, and in prod the median task adds ~5 runs an hour (2.5 % of its sample;
+// 5 of 274 active tasks turn the full 200 over in an hour). So a service is
+// fetched at most once per STATS_TTL_MS (60 min), counted from the last ATTEMPT
+// (success or failure), whichever path asks: the background sweep or a stale read.
 
 const num = z.coerce.number();
 const nullableNum = z.union([z.null(), z.coerce.number()]);
@@ -33,7 +39,9 @@ const TaskOutcomesResponseSchema = z.object({
 });
 
 export const STATS_SAMPLE = 200;
-export const STATS_TTL_MS = 15 * 60_000;
+export const STATS_TTL_MS = 60 * 60_000;
+/** How often the background sweep wakes to refresh the services whose stats are due. */
+export const STATS_SWEEP_CHECK_MS = 5 * 60_000;
 // runs-service lets this query run up to 290s (api-service takes 30-120s on a busy box);
 // stay under undici's 300s headers timeout.
 const STATS_TIMEOUT_MS = 295_000;
@@ -50,6 +58,8 @@ interface RunsEntry {
 export class TaskOutcomesCache {
   private cache = new Map<string, { outcomes: TaskOutcome[]; fetchedAt: number }>();
   private inflight = new Map<string, Promise<OutcomesResult>>();
+  /** Last fetch START per service, success or failure: the refresh clock. */
+  private lastAttempt = new Map<string, number>();
 
   constructor(
     private readonly opts: {
@@ -65,13 +75,30 @@ export class TaskOutcomesCache {
 
   clear(): void {
     this.cache.clear();
+    this.lastAttempt.clear();
+  }
+
+  private ttl(): number {
+    return this.opts.ttlMs ?? STATS_TTL_MS;
+  }
+
+  /** True when no fetch for this service started within the TTL (and none is running). */
+  isDue(runsServiceName: string): boolean {
+    if (this.inflight.has(runsServiceName)) return false;
+    const at = this.lastAttempt.get(runsServiceName);
+    return at === undefined || this.now() - at >= this.ttl();
+  }
+
+  /** Refresh only when due: the background sweep's entry point. */
+  async refreshIfDue(runsServiceName: string): Promise<void> {
+    if (this.isDue(runsServiceName)) await this.refresh(runsServiceName);
   }
 
   /** Outcomes for one runs-service `service_name`. Stale-while-revalidate. */
   async get(runsServiceName: string): Promise<OutcomesResult> {
     const hit = this.cache.get(runsServiceName);
     if (hit) {
-      if (this.now() - hit.fetchedAt >= (this.opts.ttlMs ?? STATS_TTL_MS)) {
+      if (this.now() - hit.fetchedAt >= this.ttl() && this.isDue(runsServiceName)) {
         void this.refresh(runsServiceName);
       }
       return { ok: true, outcomes: hit.outcomes, fetchedAt: new Date(hit.fetchedAt).toISOString() };
@@ -83,6 +110,7 @@ export class TaskOutcomesCache {
   refresh(runsServiceName: string): Promise<OutcomesResult> {
     const running = this.inflight.get(runsServiceName);
     if (running) return running;
+    this.lastAttempt.set(runsServiceName, this.now());
     const p = this.fetchOutcomes(runsServiceName).finally(() => this.inflight.delete(runsServiceName));
     this.inflight.set(runsServiceName, p);
     return p;
