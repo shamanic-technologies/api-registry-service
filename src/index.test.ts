@@ -375,7 +375,7 @@ describe("POST /call/:service", () => {
     const res = await request(app)
       .post("/call/campaign")
       .set(AUTH_HEADER)
-      .send({ method: "GET", path: "/admin" });
+      .send({ method: "GET", path: "/v1/forbidden-thing" });
 
     expect(res.status).toBe(200); // proxy always returns 200
     expect(res.body.status).toBe(403);
@@ -1242,5 +1242,89 @@ describe("GET /llm-context/:service filters", () => {
       .set(API_KEY_ONLY);
     expect(res.status).toBe(200);
     expect(res.body.endpoints.length).toBe(3);
+  });
+});
+
+describe("SSRF-1127: proxy path guard", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it.each([
+    "/v1/../internal/keys",
+    "/v1/%2e%2e/internal/keys",
+    "/v1/%252e%252e/internal/keys",
+    "/v1\\..\\internal",
+    "/internal/keys",
+    "/admin/users",
+    "/v1/staff/requests",
+    "//key-service:8080/internal/keys",
+    "/@127.0.0.1:2019/config/",
+    "/@169.254.169.254/latest/meta-data/",
+  ])("POST /call refuses %s with a named 400 and never fetches", async (path) => {
+    const res = await request(app)
+      .post("/call/campaign")
+      .set(AUTH_HEADER)
+      .send({ method: "GET", path });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("proxy_path_refused");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("POST /call drops a caller Host header and never follows redirects", async () => {
+    mockFetch.mockResolvedValueOnce({ status: 302, ok: false, text: async () => "" });
+    const res = await request(app)
+      .post("/call/campaign")
+      .set(AUTH_HEADER)
+      .send({ method: "GET", path: "/v1/campaigns", headers: { Host: "key-service:8080", "x-run-id": "r1" } });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(302);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://campaign.example.com/v1/campaigns");
+    expect(opts.redirect).toBe("manual");
+    expect(opts.headers.Host).toBeUndefined();
+    expect(opts.headers["x-run-id"]).toBe("r1");
+  });
+
+  it("MCP call_api refuses a traversal path and never fetches", async () => {
+    const MCP_HEADERS = { "x-api-key": "test-registry-key", Accept: "application/json, text/event-stream" };
+    const init = await request(app)
+      .post("/mcp")
+      .set(MCP_HEADERS)
+      .send({
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+        id: 1,
+      });
+    const sessionId = init.headers["mcp-session-id"];
+    await request(app)
+      .post("/mcp")
+      .set({ ...MCP_HEADERS, "mcp-session-id": sessionId })
+      .send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    const res = await request(app)
+      .post("/mcp")
+      .set({ ...MCP_HEADERS, "mcp-session-id": sessionId })
+      .send({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "call_api", arguments: { service: "campaign", method: "GET", path: "/v1/%2e%2e/internal/keys" } },
+        id: 2,
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("proxy_path_refused");
+    expect(mockFetch).not.toHaveBeenCalled();
+    await request(app).delete("/mcp").set({ ...MCP_HEADERS, "mcp-session-id": sessionId });
+  });
+});
+
+describe("SSRF-1127: timing-safe key check", () => {
+  it("refuses a wrong key of the same length and a Bearer with the wrong key", async () => {
+    const wrong = await request(app).get("/services").set({ "x-api-key": "test-registry-kez" });
+    expect(wrong.status).toBe(401);
+    const bearer = await request(app).get("/services").set({ authorization: "Bearer nope" });
+    expect(bearer.status).toBe(401);
+    const ok = await request(app).get("/services").set({ authorization: "Bearer test-registry-key" });
+    expect(ok.status).toBe(200);
   });
 });
