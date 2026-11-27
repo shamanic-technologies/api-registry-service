@@ -4,6 +4,7 @@ import { Express, Request, Response } from "express";
 import { z } from "zod";
 import { EndpointSearchIndex, derivePathGroup, type IndexedEndpoint } from "./search.js";
 import { cleanHeader } from "./auth.js";
+import { buildProxyUrl, sanitizeCallerHeaders, ProxyPathRefusedError } from "./path-guard.js";
 import { lookupService } from "./catalog.js";
 import type { Discovery } from "./discovery.js";
 
@@ -658,11 +659,26 @@ export function registerMcpEndpoint(
         }
         const { entry } = found;
 
+        let url: string;
+        let callerHeaders: Record<string, string>;
         try {
-          const url = `${entry.baseUrl}${path}`;
+          url = buildProxyUrl(entry.baseUrl, path);
+          callerHeaders = sanitizeCallerHeaders(extraHeaders);
+        } catch (err) {
+          if (err instanceof ProxyPathRefusedError) {
+            console.warn(`[api-registry] MCP call_api ${service} refused: ${err.message}`);
+            return {
+              isError: true,
+              content: [{ type: "text", text: JSON.stringify({ status: 400, error: err.message, code: err.code }) }],
+            };
+          }
+          throw err;
+        }
+
+        try {
           const fetchHeaders: Record<string, string> = {
             "Content-Type": "application/json",
-            ...extraHeaders,
+            ...callerHeaders,
           };
 
           // Forward identity headers (force-overwrite to prevent spoofing)
@@ -678,6 +694,7 @@ export function registerMcpEndpoint(
             method,
             headers: fetchHeaders,
             body: body && ["POST", "PUT", "PATCH"].includes(method) ? JSON.stringify(body) : undefined,
+            redirect: "manual",
             signal: AbortSignal.timeout(30_000),
           });
 

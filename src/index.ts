@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import { registerMcpEndpoint } from "./mcp.js";
 import cors from "cors";
 import { requireApiKey, requireIdentity, cleanHeader } from "./auth.js";
+import { buildProxyUrl, sanitizeCallerHeaders, ProxyPathRefusedError } from "./path-guard.js";
 import { EndpointSearchIndex, derivePathGroup } from "./search.js";
 import { Discovery } from "./discovery.js";
 import { TaskOutcomesCache, STATS_SWEEP_CHECK_MS } from "./run-stats.js";
@@ -412,15 +413,23 @@ app.post("/call/:service", async (req, res) => {
     return res.status(400).json({ error: `Invalid method: ${method}` });
   }
 
-  if (!path.startsWith("/")) {
-    return res.status(400).json({ error: "Path must start with /" });
+  let url: string;
+  let callerHeaders: Record<string, string>;
+  try {
+    url = buildProxyUrl(entry.baseUrl, path);
+    callerHeaders = sanitizeCallerHeaders(extraHeaders);
+  } catch (err) {
+    if (err instanceof ProxyPathRefusedError) {
+      console.warn(`[api-registry] /call/${service} refused: ${err.message}`);
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    throw err;
   }
 
   try {
-    const url = `${entry.baseUrl}${path}`;
     const fetchHeaders: Record<string, string> = {
       "Content-Type": "application/json",
-      ...extraHeaders,
+      ...callerHeaders,
     };
 
     // Forward identity headers (force-overwrite to prevent spoofing, clean trailing commas)
@@ -444,6 +453,7 @@ app.post("/call/:service", async (req, res) => {
       method,
       headers: fetchHeaders,
       body: body && ["POST", "PUT", "PATCH"].includes(method) ? JSON.stringify(body) : undefined,
+      redirect: "manual",
       signal: AbortSignal.timeout(30_000),
     });
 
